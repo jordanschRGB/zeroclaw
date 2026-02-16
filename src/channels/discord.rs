@@ -343,11 +343,16 @@ impl Channel for DiscordChannel {
                         continue;
                     }
 
+                    let message_id = d.get("id").and_then(|i| i.as_str()).unwrap_or("");
                     let channel_id = d.get("channel_id").and_then(|c| c.as_str()).unwrap_or("").to_string();
 
                     let channel_msg = ChannelMessage {
-                        id: Uuid::new_v4().to_string(),
-                        sender: channel_id,
+                        id: if message_id.is_empty() {
+                            Uuid::new_v4().to_string()
+                        } else {
+                            format!("discord_{message_id}")
+                        },
+                        sender: author_id.to_string(),
                         content: content.to_string(),
                         channel: "discord".to_string(),
                         timestamp: std::time::SystemTime::now()

@@ -160,8 +160,8 @@ impl Channel for SlackChannel {
                     last_ts = ts.to_string();
 
                     let channel_msg = ChannelMessage {
-                        id: Uuid::new_v4().to_string(),
-                        sender: channel_id.clone(),
+                        id: format!("slack_{channel_id}_{ts}"),
+                        sender: user.to_string(),
                         content: text.to_string(),
                         channel: "slack".to_string(),
                         timestamp: std::time::SystemTime::now()

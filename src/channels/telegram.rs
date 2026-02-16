@@ -579,6 +579,11 @@ Allowlist Telegram @username or numeric user ID, then run `zeroclaw onboard --ch
                         continue;
                     };
 
+                    let message_id = message
+                        .get("message_id")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+
                     // Send "typing" indicator immediately when we receive a message
                     let typing_body = serde_json::json!({
                         "chat_id": &chat_id,
@@ -592,8 +597,8 @@ Allowlist Telegram @username or numeric user ID, then run `zeroclaw onboard --ch
                         .await; // Ignore errors for typing indicator
 
                     let msg = ChannelMessage {
-                        id: Uuid::new_v4().to_string(),
-                        sender: chat_id,
+                        id: format!("telegram_{chat_id}_{message_id}"),
+                        sender: username.to_string(),
                         content: text.to_string(),
                         channel: "telegram".to_string(),
                         timestamp: std::time::SystemTime::now()
