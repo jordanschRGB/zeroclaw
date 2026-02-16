@@ -39,7 +39,13 @@ use clap::Subcommand;
 use serde::{Deserialize, Serialize};
 
 pub mod agent;
+#[cfg(feature = "voice")]
+pub mod audio;
 pub mod channels;
+#[cfg(feature = "voice")]
+pub mod stt;
+#[cfg(feature = "voice")]
+pub mod tts;
 pub mod config;
 pub mod cost;
 pub mod cron;

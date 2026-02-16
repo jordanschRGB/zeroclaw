@@ -131,7 +131,7 @@ Every subsystem is a **trait** — swap implementations with a config change, ze
 | **Memory** | `Memory` | SQLite with hybrid search (FTS5 + vector cosine similarity), Lucid bridge (CLI sync + SQLite fallback), Markdown | Any persistence backend |
 | **Tools** | `Tool` | shell, file_read, file_write, memory_store, memory_recall, memory_forget, browser_open (Brave + allowlist), browser (agent-browser / rust-native), composio (optional) | Any capability |
 | **Observability** | `Observer` | Noop, Log, Multi | Prometheus, OTel |
-| **Runtime** | `RuntimeAdapter` | Native, Docker (sandboxed) | WASM (planned; unsupported kinds fail fast) |
+| **Runtime** | `RuntimeAdapter` | Native, Docker (sandboxed), WASM Sandbox (in-process) | — |
 | **Security** | `SecurityPolicy` | Gateway pairing, sandbox, allowlists, rate limits, filesystem scoping, encrypted secrets | — |
 | **Identity** | `IdentityConfig` | OpenClaw (markdown), AIEOS v1.1 (JSON) | Any identity format |
 | **Tunnel** | `Tunnel` | None, Cloudflare, Tailscale, ngrok, Custom | Any tunnel binary |
@@ -141,8 +141,8 @@ Every subsystem is a **trait** — swap implementations with a config change, ze
 
 ### Runtime support (current)
 
-- ✅ Supported today: `runtime.kind = "native"` or `runtime.kind = "docker"`
-- 🚧 Planned, not implemented yet: WASM / edge runtimes
+- ✅ Supported today: `runtime.kind = "native"`, `"docker"`, or `"wasm"`
+- 🛠 WASM support requires: `cargo build --release --features runtime-wasm`
 
 When an unsupported `runtime.kind` is configured, ZeroClaw now exits with a clear error instead of silently falling back to native.
 
@@ -293,7 +293,15 @@ allowed_commands = ["git", "npm", "cargo", "ls", "cat", "grep"]
 forbidden_paths = ["/etc", "/root", "/proc", "/sys", "~/.ssh", "~/.gnupg", "~/.aws"]
 
 [runtime]
-kind = "native"                # "native" or "docker"
+kind = "native"                # "native", "docker", or "wasm"
+
+[runtime.wasm]
+tools_dir = "wasm_tools"       # Directory for .wasm tool modules
+memory_limit_mb = 64           # Per-module memory cap
+fuel_limit = 1000000            # Instruction tick limit
+allow_workspace_read = true    # Opt-in filesystem access
+allow_workspace_write = false
+allowed_hosts = []             # Opt-in network access (e.g. ["api.github.com"])
 
 [runtime.docker]
 image = "alpine:3.20"          # container image for shell execution
@@ -439,7 +447,8 @@ See [aieos.org](https://aieos.org) for the full schema and live examples.
 | Command | Description |
 |---------|-------------|
 | `onboard` | Quick setup (default) |
-| `onboard --interactive` | Full interactive 7-step wizard |
+| `onboard --runtime wasm` | Quick setup with specific runtime |
+| `onboard --interactive` | Full interactive 10-step wizard |
 | `onboard --channels-only` | Reconfigure channels/allowlists only (fast repair flow) |
 | `agent -m "..."` | Single message mode |
 | `agent` | Interactive chat mode |

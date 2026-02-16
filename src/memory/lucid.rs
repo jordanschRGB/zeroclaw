@@ -1,4 +1,3 @@
-use super::sqlite::SqliteMemory;
 use super::traits::{Memory, MemoryCategory, MemoryEntry};
 use async_trait::async_trait;
 use chrono::Local;
@@ -9,90 +8,60 @@ use std::time::{Duration, Instant};
 use tokio::process::Command;
 use tokio::time::timeout;
 
+/// Lucid Memory component — local-first with distributed context fallback.
+///
+/// When a local query returns too few results (below `local_hit_threshold`),
+/// LucidMemory can fall back to a distributed context provider (the "lucid" binary)
+/// to fetch shared knowledge or remote context.
 pub struct LucidMemory {
+    workspace_dir: PathBuf,
     local: SqliteMemory,
     lucid_cmd: String,
-    token_budget: usize,
-    workspace_dir: PathBuf,
-    recall_timeout: Duration,
-    store_timeout: Duration,
     local_hit_threshold: usize,
     failure_cooldown: Duration,
+    sync_timeout: Duration,
+    recall_timeout: Duration,
     last_failure_at: Mutex<Option<Instant>>,
 }
 
+use super::sqlite::SqliteMemory;
+
 impl LucidMemory {
-    const DEFAULT_LUCID_CMD: &'static str = "lucid";
-    const DEFAULT_TOKEN_BUDGET: usize = 200;
-    const DEFAULT_RECALL_TIMEOUT_MS: u64 = 120;
-    const DEFAULT_STORE_TIMEOUT_MS: u64 = 800;
-    const DEFAULT_LOCAL_HIT_THRESHOLD: usize = 3;
-    const DEFAULT_FAILURE_COOLDOWN_MS: u64 = 15_000;
-
     pub fn new(workspace_dir: &Path, local: SqliteMemory) -> Self {
-        let lucid_cmd = std::env::var("ZEROCLAW_LUCID_CMD")
-            .unwrap_or_else(|_| Self::DEFAULT_LUCID_CMD.to_string());
+        let lucid_cmd = std::env::var("ZEROCLAW_LUCID_CMD").unwrap_or_else(|_| "lucid".to_string());
+        let local_hit_threshold = Self::read_env_usize("ZEROCLAW_LUCID_THRESHOLD", 1, 0);
 
-        let token_budget = std::env::var("ZEROCLAW_LUCID_BUDGET")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .filter(|v| *v > 0)
-            .unwrap_or(Self::DEFAULT_TOKEN_BUDGET);
-
-        let recall_timeout = Self::read_env_duration_ms(
-            "ZEROCLAW_LUCID_RECALL_TIMEOUT_MS",
-            Self::DEFAULT_RECALL_TIMEOUT_MS,
-            20,
-        );
-        let store_timeout = Self::read_env_duration_ms(
-            "ZEROCLAW_LUCID_STORE_TIMEOUT_MS",
-            Self::DEFAULT_STORE_TIMEOUT_MS,
-            50,
-        );
-        let local_hit_threshold = Self::read_env_usize(
-            "ZEROCLAW_LUCID_LOCAL_HIT_THRESHOLD",
-            Self::DEFAULT_LOCAL_HIT_THRESHOLD,
-            1,
-        );
-        let failure_cooldown = Self::read_env_duration_ms(
-            "ZEROCLAW_LUCID_FAILURE_COOLDOWN_MS",
-            Self::DEFAULT_FAILURE_COOLDOWN_MS,
-            100,
-        );
-
-        Self {
+        Self::with_options(
+            workspace_dir,
             local,
             lucid_cmd,
-            token_budget,
-            workspace_dir: workspace_dir.to_path_buf(),
-            recall_timeout,
-            store_timeout,
+            200, // Sync budget
             local_hit_threshold,
-            failure_cooldown,
-            last_failure_at: Mutex::new(None),
-        }
+            Duration::from_millis(150), // Sync timeout
+            Duration::from_millis(800), // Recall timeout
+            Duration::from_secs(10),    // Failure cooldown
+        )
     }
 
-    #[cfg(test)]
-    fn with_options(
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_options(
         workspace_dir: &Path,
         local: SqliteMemory,
         lucid_cmd: String,
-        token_budget: usize,
+        _sync_budget: usize,
         local_hit_threshold: usize,
+        sync_timeout: Duration,
         recall_timeout: Duration,
-        store_timeout: Duration,
         failure_cooldown: Duration,
     ) -> Self {
         Self {
+            workspace_dir: workspace_dir.to_path_buf(),
             local,
             lucid_cmd,
-            token_budget,
-            workspace_dir: workspace_dir.to_path_buf(),
-            recall_timeout,
-            store_timeout,
-            local_hit_threshold: local_hit_threshold.max(1),
+            local_hit_threshold,
             failure_cooldown,
+            sync_timeout,
+            recall_timeout,
             last_failure_at: Mutex::new(None),
         }
     }
@@ -102,14 +71,6 @@ impl LucidMemory {
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
             .map_or(default, |v| v.max(min))
-    }
-
-    fn read_env_duration_ms(name: &str, default_ms: u64, min_ms: u64) -> Duration {
-        let millis = std::env::var(name)
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-            .map_or(default_ms, |v| v.max(min_ms));
-        Duration::from_millis(millis)
     }
 
     fn in_failure_cooldown(&self) -> bool {
@@ -260,43 +221,30 @@ impl LucidMemory {
     async fn run_lucid_command(
         &self,
         args: &[String],
-        timeout_window: Duration,
+        timeout: Duration,
     ) -> anyhow::Result<String> {
-        Self::run_lucid_command_raw(&self.lucid_cmd, args, timeout_window).await
-    }
-
-    fn build_store_args(&self, key: &str, content: &str, category: &MemoryCategory) -> Vec<String> {
-        let payload = format!("{key}: {content}");
-        vec![
-            "store".to_string(),
-            payload,
-            format!("--type={}", Self::to_lucid_type(category)),
-            format!("--project={}", self.workspace_dir.display()),
-        ]
-    }
-
-    fn build_recall_args(&self, query: &str) -> Vec<String> {
-        vec![
-            "context".to_string(),
-            query.to_string(),
-            format!("--budget={}", self.token_budget),
-            format!("--project={}", self.workspace_dir.display()),
-        ]
+        Self::run_lucid_command_raw(&self.lucid_cmd, args, timeout).await
     }
 
     async fn sync_to_lucid_async(&self, key: &str, content: &str, category: &MemoryCategory) {
-        let args = self.build_store_args(key, content, category);
-        if let Err(error) = self.run_lucid_command(&args, self.store_timeout).await {
-            tracing::debug!(
-                command = %self.lucid_cmd,
-                error = %error,
-                "Lucid store sync failed; sqlite remains authoritative"
-            );
-        }
+        let args = vec![
+            "store".to_string(),
+            format!("{key}: {content}"),
+            format!("--type={}", Self::to_lucid_type(category)),
+            format!("--project={}", self.workspace_dir.display()),
+        ];
+
+        let _ = self.run_lucid_command(&args, self.sync_timeout).await;
     }
 
     async fn recall_from_lucid(&self, query: &str) -> anyhow::Result<Vec<MemoryEntry>> {
-        let args = self.build_recall_args(query);
+        let args = vec![
+            "context".to_string(),
+            query.to_string(),
+            format!("--budget=200"),
+            format!("--project={}", self.workspace_dir.display()),
+        ];
+
         let output = self.run_lucid_command(&args, self.recall_timeout).await?;
         Ok(Self::parse_lucid_context(&output))
     }
@@ -455,9 +403,9 @@ exit 1
             cmd,
             200,
             3,
-            Duration::from_millis(120),
-            Duration::from_millis(400),
-            Duration::from_secs(2),
+            Duration::from_millis(150),
+            Duration::from_millis(800),
+            Duration::from_secs(10),
         )
     }
 
@@ -519,9 +467,9 @@ exit 1
             probe_cmd,
             200,
             1,
-            Duration::from_millis(120),
-            Duration::from_millis(400),
-            Duration::from_secs(2),
+            Duration::from_millis(150),
+            Duration::from_millis(800),
+            Duration::from_secs(10),
         );
 
         memory

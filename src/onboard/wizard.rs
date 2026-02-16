@@ -69,35 +69,38 @@ pub fn run_wizard() -> Result<Config> {
     );
     println!();
 
-    print_step(1, 9, "Workspace Setup");
+    print_step(1, 10, "Workspace Setup");
     let (workspace_dir, config_path) = setup_workspace()?;
 
-    print_step(2, 9, "AI Provider & API Key");
+    print_step(2, 10, "AI Provider & API Key");
     let (provider, api_key, model) = setup_provider(&workspace_dir)?;
 
-    print_step(3, 9, "Channels (How You Talk to ZeroClaw)");
+    print_step(3, 10, "Channels (How You Talk to ZeroClaw)");
     let channels_config = setup_channels()?;
 
-    print_step(4, 9, "Tunnel (Expose to Internet)");
+    print_step(4, 10, "Tunnel (Expose to Internet)");
     let tunnel_config = setup_tunnel()?;
 
-    print_step(5, 9, "Tool Mode & Security");
+    print_step(5, 10, "Tool Mode & Security");
     let (composio_config, secrets_config) = setup_tool_mode()?;
 
-    print_step(6, 9, "Hardware (Physical World)");
+    print_step(6, 10, "Execution Runtime");
+    let runtime_config = setup_runtime()?;
+
+    print_step(7, 10, "Hardware (Physical World)");
     let hardware_config = setup_hardware()?;
 
-    print_step(7, 9, "Memory Configuration");
+    print_step(8, 10, "Memory Configuration");
     let memory_config = setup_memory()?;
 
-    print_step(8, 9, "Project Context (Personalize Your Agent)");
+    print_step(9, 10, "Project Context (Personalize Your Agent)");
     let project_ctx = setup_project_context()?;
 
-    print_step(9, 9, "Workspace Files");
+    print_step(10, 10, "Workspace Files");
     scaffold_workspace(&workspace_dir, &project_ctx)?;
 
     // ── Build config ──
-    // Defaults: SQLite memory, supervised autonomy, workspace-scoped, native runtime
+    // Defaults: SQLite memory, supervised autonomy, workspace-scoped
     let config = Config {
         workspace_dir: workspace_dir.clone(),
         config_path: config_path.clone(),
@@ -111,7 +114,7 @@ pub fn run_wizard() -> Result<Config> {
         default_temperature: 0.7,
         observability: ObservabilityConfig::default(),
         autonomy: AutonomyConfig::default(),
-        runtime: RuntimeConfig::default(),
+        runtime: runtime_config,
         reliability: crate::config::ReliabilityConfig::default(),
         scheduler: crate::config::schema::SchedulerConfig::default(),
         agent: crate::config::schema::AgentConfig::default(),
@@ -286,6 +289,7 @@ pub fn run_quick_setup(
     api_key: Option<&str>,
     provider: Option<&str>,
     memory_backend: Option<&str>,
+    runtime_kind: Option<&str>,
 ) -> Result<Config> {
     println!("{}", style(BANNER).cyan().bold());
     println!(
@@ -311,6 +315,13 @@ pub fn run_quick_setup(
         .unwrap_or(default_memory_backend_key())
         .to_string();
 
+    let runtime_kind_name = runtime_kind.unwrap_or("native").to_string();
+
+    // Validate runtime availability if WASM is chosen
+    if runtime_kind_name == "wasm" && !cfg!(feature = "runtime-wasm") {
+        anyhow::bail!("WASM runtime is not available in this build. Rebuild with --features runtime-wasm");
+    }
+
     // Create memory config based on backend choice
     let memory_config = memory_config_defaults_for_backend(&memory_backend_name);
 
@@ -323,7 +334,10 @@ pub fn run_quick_setup(
         default_temperature: 0.7,
         observability: ObservabilityConfig::default(),
         autonomy: AutonomyConfig::default(),
-        runtime: RuntimeConfig::default(),
+        runtime: RuntimeConfig {
+            kind: runtime_kind_name.clone(),
+            ..RuntimeConfig::default()
+        },
         reliability: crate::config::ReliabilityConfig::default(),
         scheduler: crate::config::schema::SchedulerConfig::default(),
         agent: crate::config::schema::AgentConfig::default(),
@@ -385,6 +399,11 @@ pub fn run_quick_setup(
         "  {} Security:   {}",
         style("✓").green().bold(),
         style("Supervised (workspace-scoped)").green()
+    );
+    println!(
+        "  {} Runtime:    {}",
+        style("✓").green().bold(),
+        style(&runtime_kind_name).green()
     );
     println!(
         "  {} Memory:     {} (auto-save: {})",
@@ -1890,6 +1909,65 @@ fn setup_tool_mode() -> Result<(ComposioConfig, SecretsConfig)> {
     Ok((composio_config, secrets_config))
 }
 
+fn setup_runtime() -> Result<RuntimeConfig> {
+    print_bullet("Choose how ZeroClaw executes shell commands and tools.");
+    print_bullet("WASM sandbox is recommended for secure third-party tool execution.");
+    println!();
+
+    let mut options = vec![
+        "Native — full speed, direct OS access (standard)".to_string(),
+        "Docker — isolated in a container (requires Docker installed)".to_string(),
+    ];
+
+    if cfg!(feature = "runtime-wasm") {
+        options.push("WASM Sandbox — secure, fast, in-process isolation (recommended)".to_string());
+    } else {
+        options.push("WASM Sandbox — (not available in this build)".to_string());
+    }
+
+    let choice = Select::new()
+        .with_prompt("  Select execution runtime")
+        .items(&options)
+        .default(0)
+        .interact()?;
+
+    match choice {
+        1 => {
+            println!(
+                "  {} Runtime: {} — containerized execution",
+                style("✓").green().bold(),
+                style("Docker").green()
+            );
+            Ok(RuntimeConfig {
+                kind: "docker".into(),
+                ..RuntimeConfig::default()
+            })
+        }
+        2 if cfg!(feature = "runtime-wasm") => {
+            println!(
+                "  {} Runtime: {} — secure in-process sandbox",
+                style("✓").green().bold(),
+                style("WASM Sandbox").green()
+            );
+            Ok(RuntimeConfig {
+                kind: "wasm".into(),
+                ..RuntimeConfig::default()
+            })
+        }
+        _ => {
+            println!(
+                "  {} Runtime: {} — full OS access",
+                style("✓").green().bold(),
+                style("Native").green()
+            );
+            Ok(RuntimeConfig {
+                kind: "native".into(),
+                ..RuntimeConfig::default()
+            })
+        }
+    }
+}
+
 // ── Step 6: Hardware (Physical World) ───────────────────────────
 
 fn setup_hardware() -> Result<HardwareConfig> {
@@ -2239,6 +2317,7 @@ fn setup_channels() -> Result<ChannelsConfig> {
         irc: None,
         lark: None,
         dingtalk: None,
+        voice: None,
     };
 
     loop {
@@ -3540,7 +3619,7 @@ fn scaffold_workspace(workspace_dir: &Path, ctx: &ProjectContext) -> Result<()> 
     ];
 
     // Create subdirectories
-    let subdirs = ["sessions", "memory", "state", "cron", "skills"];
+    let subdirs = ["sessions", "memory", "state", "cron", "skills", "wasm_tools"];
     for dir in &subdirs {
         fs::create_dir_all(workspace_dir.join(dir))?;
     }
@@ -3635,6 +3714,11 @@ fn print_summary(config: &Config) {
         "    {} Autonomy:      {:?}",
         style("🛡️").cyan(),
         config.autonomy.level
+    );
+    println!(
+        "    {} Runtime:       {}",
+        style("⚙️").cyan(),
+        config.runtime.kind
     );
     println!(
         "    {} Memory:        {} (auto-save: {})",

@@ -60,9 +60,6 @@ hex = "0.4"
 # CSPRNG for secure token generation
 rand = "0.8"
 
-# Landlock (Linux sandbox) - optional dependency
-landlock = { version = "0.4", optional = true }
-
 # Async traits
 async-trait = "0.1"
 
@@ -112,9 +109,17 @@ probe-rs = { version = "0.30", optional = true }
 # PDF extraction for datasheet RAG (optional, enable with --features rag-pdf)
 pdf-extract = { version = "0.10", optional = true }
 
+# Voice/Audio — cross-platform audio I/O and playback
+cpal = { version = "0.15", optional = true }
+rodio = { version = "0.17", optional = true, default-features = false, features = ["wav", "vorbis"] }
+
+# WASM sandbox runtime
+wasmi = { version = "0.40", optional = true }
+
 # Raspberry Pi GPIO (Linux/RPi only) — target-specific to avoid compile failure on macOS
 [target.'cfg(target_os = "linux")'.dependencies]
 rppal = { version = "0.14", optional = true }
+landlock = { version = "0.4", optional = true }
 
 [features]
 default = ["hardware"]
@@ -122,8 +127,18 @@ hardware = ["nusb", "tokio-serial"]
 peripheral-rpi = ["rppal"]
 # probe = probe-rs for Nucleo memory read (adds ~50 deps; optional)
 probe = ["dep:probe-rs"]
+# voice = audio capture and playback for voice channel (STT/TTS)
+voice = ["cpal", "rodio"]
 # rag-pdf = PDF ingestion for datasheet RAG
 rag-pdf = ["dep:pdf-extract"]
+# runtime-wasm = WASM sandbox for secure tool execution
+runtime-wasm = ["dep:wasmi"]
+# sandbox-landlock = Linux Landlock sandbox for local tools
+sandbox-landlock = ["dep:landlock"]
+# sandbox-bubblewrap = Bubblewrap sandbox (requires bwrap binary)
+sandbox-bubblewrap = []
+# browser-native = Rust-native browser automation backend
+browser-native = ["dep:fantoccini"]
 
 [profile.release]
 opt-level = "z"      # Optimize for size

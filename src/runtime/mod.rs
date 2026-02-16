@@ -2,9 +2,15 @@ pub mod docker;
 pub mod native;
 pub mod traits;
 
+#[cfg(feature = "runtime-wasm")]
+pub mod wasm;
+
 pub use docker::DockerRuntime;
 pub use native::NativeRuntime;
 pub use traits::RuntimeAdapter;
+
+#[cfg(feature = "runtime-wasm")]
+pub use wasm::WasmRuntime;
 
 use crate::config::RuntimeConfig;
 
@@ -13,13 +19,21 @@ pub fn create_runtime(config: &RuntimeConfig) -> anyhow::Result<Box<dyn RuntimeA
     match config.kind.as_str() {
         "native" => Ok(Box::new(NativeRuntime::new())),
         "docker" => Ok(Box::new(DockerRuntime::new(config.docker.clone()))),
+        #[cfg(feature = "runtime-wasm")]
+        "wasm" => Ok(Box::new(WasmRuntime::new(config.wasm.clone()))),
+        #[cfg(not(feature = "runtime-wasm"))]
+        "wasm" => anyhow::bail!(
+            "WASM runtime is not available in this build. Rebuild with --features runtime-wasm"
+        ),
         "cloudflare" => anyhow::bail!(
             "runtime.kind='cloudflare' is not implemented yet. Use runtime.kind='native' for now."
         ),
         other if other.trim().is_empty() => {
-            anyhow::bail!("runtime.kind cannot be empty. Supported values: native, docker")
+            anyhow::bail!("runtime.kind cannot be empty. Supported values: native, docker, wasm")
         }
-        other => anyhow::bail!("Unknown runtime kind '{other}'. Supported values: native, docker"),
+        other => anyhow::bail!(
+            "Unknown runtime kind '{other}'. Supported values: native, docker, wasm"
+        ),
     }
 }
 
@@ -47,6 +61,18 @@ mod tests {
         let rt = create_runtime(&cfg).unwrap();
         assert_eq!(rt.name(), "docker");
         assert!(rt.has_shell_access());
+    }
+
+    #[test]
+    #[cfg(feature = "runtime-wasm")]
+    fn factory_wasm() {
+        let cfg = RuntimeConfig {
+            kind: "wasm".into(),
+            ..RuntimeConfig::default()
+        };
+        let rt = create_runtime(&cfg).unwrap();
+        assert_eq!(rt.name(), "wasm");
+        assert!(!rt.has_shell_access());
     }
 
     #[test]

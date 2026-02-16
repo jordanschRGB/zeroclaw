@@ -120,6 +120,7 @@ fn default_max_depth() -> u32 {
 
 /// Hardware transport mode.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum HardwareTransport {
     None,
     Native,
@@ -937,7 +938,59 @@ pub struct RuntimeConfig {
     /// Docker runtime settings (used when `kind = "docker"`).
     #[serde(default)]
     pub docker: DockerRuntimeConfig,
+
+    /// WASM sandbox settings (used when `kind = "wasm"`).
+    #[serde(default)]
+    pub wasm: WasmRuntimeConfig,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WasmRuntimeConfig {
+    /// Directory for WASM tool modules (relative to workspace).
+    #[serde(default = "default_wasm_tools_dir")]
+    pub tools_dir: String,
+    /// Maximum memory for a WASM module in MB (default: 64)
+    #[serde(default = "default_wasm_memory_limit")]
+    pub memory_limit_mb: u64,
+    /// Maximum fuel ticks for execution (default: 1,000,000)
+    #[serde(default = "default_wasm_fuel_limit")]
+    pub fuel_limit: u64,
+    /// Allow reading files from the workspace directory
+    #[serde(default)]
+    pub allow_workspace_read: bool,
+    /// Allow writing files to the workspace directory
+    #[serde(default)]
+    pub allow_workspace_write: bool,
+    /// Allowed HTTP hosts (empty = no network)
+    #[serde(default)]
+    pub allowed_hosts: Vec<String>,
+}
+
+fn default_wasm_tools_dir() -> String {
+    "tools/wasm".into()
+}
+
+fn default_wasm_memory_limit() -> u64 {
+    64
+}
+
+fn default_wasm_fuel_limit() -> u64 {
+    1_000_000
+}
+
+impl Default for WasmRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            tools_dir: default_wasm_tools_dir(),
+            memory_limit_mb: default_wasm_memory_limit(),
+            fuel_limit: default_wasm_fuel_limit(),
+            allow_workspace_read: false,
+            allow_workspace_write: false,
+            allowed_hosts: Vec::new(),
+        }
+    }
+}
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DockerRuntimeConfig {
@@ -1009,6 +1062,7 @@ impl Default for RuntimeConfig {
         Self {
             kind: default_runtime_kind(),
             docker: DockerRuntimeConfig::default(),
+            wasm: WasmRuntimeConfig::default(),
         }
     }
 }
@@ -1254,6 +1308,7 @@ pub struct ChannelsConfig {
     pub irc: Option<IrcConfig>,
     pub lark: Option<LarkConfig>,
     pub dingtalk: Option<DingTalkConfig>,
+    pub voice: Option<VoiceConfig>,
 }
 
 impl Default for ChannelsConfig {
@@ -1271,6 +1326,7 @@ impl Default for ChannelsConfig {
             irc: None,
             lark: None,
             dingtalk: None,
+            voice: None,
         }
     }
 }
@@ -1556,6 +1612,359 @@ pub struct DingTalkConfig {
     pub allowed_users: Vec<String>,
 }
 
+// ── Voice Configuration ────────────────────────────────────────────
+
+/// Voice channel configuration for speech-to-text and text-to-speech
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VoiceConfig {
+    /// Enable voice channel (default: false)
+    #[serde(default)]
+    pub enabled: bool,
+
+    // ── Audio Hardware ─────────────────────────────────────────────
+    /// Audio input device name (null = system default, "list" to show all)
+    #[serde(default)]
+    pub input_device: Option<String>,
+
+    /// Audio output device name (null = system default)
+    #[serde(default)]
+    pub output_device: Option<String>,
+
+    /// Sample rate for audio capture in Hz (default: 16000 for voice)
+    #[serde(default = "default_voice_sample_rate")]
+    pub sample_rate: u32,
+
+    /// Number of audio channels (1 = mono, 2 = stereo)
+    #[serde(default = "default_voice_channels")]
+    pub channels: u16,
+
+    /// Audio buffer size in frames (lower = less latency, more CPU)
+    #[serde(default = "default_voice_buffer_size")]
+    pub buffer_size: u32,
+
+    // ── Speech-to-Text (STT) ───────────────────────────────────────
+    /// STT provider: "openai" | "google" | "azure" | "deepgram" | "whisper_local"
+    #[serde(default = "default_stt_provider")]
+    pub stt_provider: String,
+
+    /// STT model name (e.g. "whisper-1", "latest_long")
+    #[serde(default = "default_stt_model")]
+    pub stt_model: String,
+
+    /// Language code (e.g., "en-US", "es-ES", "zh-CN")
+    #[serde(default = "default_voice_language")]
+    pub language: String,
+
+    /// Enable automatic language detection
+    #[serde(default)]
+    pub auto_detect_language: bool,
+
+    /// Confidence threshold (0.0-1.0) - below this, ask user to confirm
+    #[serde(default = "default_confidence_threshold")]
+    pub confidence_threshold: f32,
+
+    // ── Text-to-Speech (TTS) ───────────────────────────────────────
+    /// TTS provider: "openai" | "elevenlabs" | "google" | "azure" | "amazon"
+    #[serde(default = "default_tts_provider")]
+    pub tts_provider: String,
+
+    /// Voice model/ID (provider-specific, e.g., "alloy", "rachel")
+    #[serde(default = "default_tts_voice")]
+    pub voice_id: String,
+
+    /// Voice speed (0.25 = 4x slower, 1.0 = normal, 4.0 = 4x faster)
+    #[serde(default = "default_voice_speed")]
+    pub speed: f32,
+
+    /// Pitch adjustment (-20.0 to +20.0 semitones)
+    #[serde(default)]
+    pub pitch: f32,
+
+    /// Volume/gain (0.0 = silent, 1.0 = normal, 2.0 = 2x louder)
+    #[serde(default = "default_voice_volume")]
+    pub volume: f32,
+
+    // ── Wake Word Detection ─────────────────────────────────────────
+    /// Enable wake word detection (always-listening mode)
+    #[serde(default)]
+    pub wake_word_enabled: bool,
+
+    /// Wake word phrase (e.g., "hey zeroclaw", "ok claw")
+    #[serde(default)]
+    pub wake_word: Option<String>,
+
+    /// Alternative wake words
+    #[serde(default)]
+    pub wake_word_alternatives: Vec<String>,
+
+    /// Sensitivity (0.1 = very sensitive, 0.9 = less sensitive)
+    #[serde(default = "default_wake_sensitivity")]
+    pub wake_word_sensitivity: f32,
+
+    /// Minimum silence duration before sending (milliseconds)
+    #[serde(default = "default_silence_duration")]
+    pub silence_duration_ms: u32,
+
+    // ── Voice Activity Detection (VAD) ───────────────────────────────
+    /// Enable VAD to automatically detect when user stops speaking
+    #[serde(default = "default_vad_enabled")]
+    pub vad_enabled: bool,
+
+    /// VAD aggressiveness (0-3, higher = more aggressive)
+    #[serde(default = "default_vad_aggressiveness")]
+    pub vad_aggressiveness: u8,
+
+    /// Speech probability threshold (0.0-1.0)
+    #[serde(default = "default_speech_threshold")]
+    pub speech_threshold: f32,
+
+    // ── Conversation Flow ───────────────────────────────────────────
+    /// Conversation mode: "turn-taking" | "continuous" | "push-to-talk"
+    #[serde(default = "default_conversation_mode")]
+    pub conversation_mode: String,
+
+    /// Maximum recording duration (seconds)
+    #[serde(default = "default_max_recording_duration")]
+    pub max_recording_duration: u32,
+
+    /// Minimum recording duration (seconds) - ignore shorter utterances
+    #[serde(default = "default_min_recording_duration")]
+    pub min_recording_duration: f32,
+
+    /// Playback audio before sending (confirmation mode)
+    #[serde(default)]
+    pub playback_confirmation: bool,
+
+    /// Enable interruption detection (user can speak over TTS)
+    #[serde(default = "default_interruption_enabled")]
+    pub interruption_enabled: bool,
+
+    // ── Audio Processing ───────────────────────────────────────────
+    /// Enable noise suppression
+    #[serde(default)]
+    pub noise_suppression: bool,
+
+    /// Enable echo cancellation (for speakerphone use)
+    #[serde(default)]
+    pub echo_cancellation: bool,
+
+    /// Enable automatic gain control
+    #[serde(default = "default_agc_enabled")]
+    pub auto_gain_control: bool,
+
+    /// Enable audio normalization
+    #[serde(default)]
+    pub normalize_audio: bool,
+
+    // ── Privacy & Security ─────────────────────────────────────────
+    /// Store audio recordings (for debugging/training)
+    #[serde(default)]
+    pub store_recordings: bool,
+
+    /// Retention days for stored recordings
+    #[serde(default = "default_recording_retention")]
+    pub recording_retention_days: u32,
+
+    /// Encrypt stored audio recordings
+    #[serde(default)]
+    pub encrypt_recordings: bool,
+
+    /// Mask PII in transcriptions (phone numbers, emails, etc.)
+    #[serde(default)]
+    pub mask_pii: bool,
+
+    // ── Accessibility ───────────────────────────────────────────────
+    /// Visual feedback (LED, notification, etc.)
+    #[serde(default)]
+    pub visual_feedback: bool,
+
+    /// Text fallback (show transcription on screen)
+    #[serde(default = "default_show_transcription")]
+    pub show_transcription: bool,
+
+    /// Verbose mode (announce actions verbally)
+    #[serde(default)]
+    pub verbose_mode: bool,
+
+    // ── Advanced ────────────────────────────────────────────────────
+    /// Streaming mode (lower latency, more API calls)
+    #[serde(default = "default_streaming_enabled")]
+    pub streaming_enabled: bool,
+
+    /// Connection timeout (seconds)
+    #[serde(default = "default_voice_timeout")]
+    pub connection_timeout_secs: u64,
+
+    /// Retry attempts for failed API calls
+    #[serde(default = "default_voice_retries")]
+    pub max_retries: u32,
+
+    /// Fallback STT provider (if primary fails)
+    #[serde(default)]
+    pub stt_fallback: Option<String>,
+
+    /// Fallback TTS provider (if primary fails)
+    #[serde(default)]
+    pub tts_fallback: Option<String>,
+}
+
+// Voice configuration defaults
+fn default_voice_sample_rate() -> u32 {
+    16000 // Voice-optimized sample rate
+}
+
+fn default_voice_channels() -> u16 {
+    1 // Mono for voice
+}
+
+fn default_voice_buffer_size() -> u32 {
+    512 // Balance between latency and CPU
+}
+
+fn default_stt_provider() -> String {
+    "openai".into()
+}
+
+fn default_stt_model() -> String {
+    "whisper-1".into()
+}
+
+fn default_voice_language() -> String {
+    "en-US".into()
+}
+
+fn default_confidence_threshold() -> f32 {
+    0.7
+}
+
+fn default_tts_provider() -> String {
+    "openai".into()
+}
+
+fn default_tts_voice() -> String {
+    "alloy".into()
+}
+
+fn default_voice_speed() -> f32 {
+    1.0
+}
+
+fn default_voice_volume() -> f32 {
+    1.0
+}
+
+fn default_wake_sensitivity() -> f32 {
+    0.5
+}
+
+fn default_silence_duration() -> u32 {
+    800
+}
+
+fn default_vad_enabled() -> bool {
+    true
+}
+
+fn default_vad_aggressiveness() -> u8 {
+    2
+}
+
+fn default_speech_threshold() -> f32 {
+    0.5
+}
+
+fn default_conversation_mode() -> String {
+    "turn-taking".into()
+}
+
+fn default_max_recording_duration() -> u32 {
+    30
+}
+
+fn default_min_recording_duration() -> f32 {
+    0.5
+}
+
+fn default_interruption_enabled() -> bool {
+    true
+}
+
+fn default_agc_enabled() -> bool {
+    true
+}
+
+fn default_recording_retention() -> u32 {
+    7
+}
+
+fn default_show_transcription() -> bool {
+    true
+}
+
+fn default_streaming_enabled() -> bool {
+    true
+}
+
+fn default_voice_timeout() -> u64 {
+    10
+}
+
+fn default_voice_retries() -> u32 {
+    3
+}
+
+impl Default for VoiceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            input_device: None,
+            output_device: None,
+            sample_rate: default_voice_sample_rate(),
+            channels: default_voice_channels(),
+            buffer_size: default_voice_buffer_size(),
+            stt_provider: default_stt_provider(),
+            stt_model: default_stt_model(),
+            language: default_voice_language(),
+            auto_detect_language: false,
+            confidence_threshold: default_confidence_threshold(),
+            tts_provider: default_tts_provider(),
+            voice_id: default_tts_voice(),
+            speed: default_voice_speed(),
+            pitch: 0.0,
+            volume: default_voice_volume(),
+            wake_word_enabled: false,
+            wake_word: None,
+            wake_word_alternatives: Vec::new(),
+            wake_word_sensitivity: default_wake_sensitivity(),
+            silence_duration_ms: default_silence_duration(),
+            vad_enabled: default_vad_enabled(),
+            vad_aggressiveness: default_vad_aggressiveness(),
+            speech_threshold: default_speech_threshold(),
+            conversation_mode: default_conversation_mode(),
+            max_recording_duration: default_max_recording_duration(),
+            min_recording_duration: default_min_recording_duration(),
+            playback_confirmation: false,
+            interruption_enabled: default_interruption_enabled(),
+            noise_suppression: false,
+            echo_cancellation: false,
+            auto_gain_control: default_agc_enabled(),
+            normalize_audio: false,
+            store_recordings: false,
+            recording_retention_days: default_recording_retention(),
+            encrypt_recordings: false,
+            mask_pii: false,
+            visual_feedback: false,
+            show_transcription: default_show_transcription(),
+            verbose_mode: false,
+            streaming_enabled: default_streaming_enabled(),
+            connection_timeout_secs: default_voice_timeout(),
+            max_retries: default_voice_retries(),
+            stt_fallback: None,
+            tts_fallback: None,
+        }
+    }
+}
+
 // ── Config impl ──────────────────────────────────────────────────
 
 impl Default for Config {
@@ -1810,7 +2219,7 @@ fn sync_directory(_path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use std::path::PathBuf;
-    use tempfile::TempDir;
+    
 
     // ── Defaults ─────────────────────────────────────────────
 
@@ -1935,6 +2344,7 @@ mod tests {
                 irc: None,
                 lark: None,
                 dingtalk: None,
+                voice: None,
             },
             memory: MemoryConfig::default(),
             tunnel: TunnelConfig::default(),
@@ -2227,6 +2637,7 @@ tool_dispatcher = "xml"
             irc: None,
             lark: None,
             dingtalk: None,
+            voice: None,
         };
         let toml_str = toml::to_string_pretty(&c).unwrap();
         let parsed: ChannelsConfig = toml::from_str(&toml_str).unwrap();
@@ -2237,10 +2648,11 @@ tool_dispatcher = "xml"
     }
 
     #[test]
-    fn channels_config_default_has_no_imessage_matrix() {
+    fn channels_config_default_has_no_imessage_matrix_voice() {
         let c = ChannelsConfig::default();
         assert!(c.imessage.is_none());
         assert!(c.matrix.is_none());
+        assert!(c.voice.is_none());
     }
 
     // ── Edge cases: serde(default) for allowed_users ─────────
@@ -2387,6 +2799,7 @@ channel_id = "C123"
             irc: None,
             lark: None,
             dingtalk: None,
+            voice: None,
         };
         let toml_str = toml::to_string_pretty(&c).unwrap();
         let parsed: ChannelsConfig = toml::from_str(&toml_str).unwrap();
@@ -2400,6 +2813,7 @@ channel_id = "C123"
     fn channels_config_default_has_no_whatsapp() {
         let c = ChannelsConfig::default();
         assert!(c.whatsapp.is_none());
+        assert!(c.voice.is_none());
     }
 
     // ══════════════════════════════════════════════════════════
@@ -2914,5 +3328,414 @@ default_temperature = 0.7
         assert_eq!(parsed.boards.len(), 1);
         assert_eq!(parsed.boards[0].board, "nucleo-f401re");
         assert_eq!(parsed.boards[0].path.as_deref(), Some("/dev/ttyACM0"));
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // VOICE CONFIG TESTS
+    // ══════════════════════════════════════════════════════════
+
+    #[test]
+    fn voice_config_default_disabled() {
+        let v = VoiceConfig::default();
+        assert!(!v.enabled);
+        assert!(v.input_device.is_none());
+        assert!(v.output_device.is_none());
+        assert_eq!(v.sample_rate, 16000);
+        assert_eq!(v.channels, 1);
+        assert_eq!(v.buffer_size, 512);
+    }
+
+    #[test]
+    fn voice_config_default_audio_settings() {
+        let v = VoiceConfig::default();
+        assert_eq!(v.stt_provider, "openai");
+        assert_eq!(v.stt_model, "whisper-1");
+        assert_eq!(v.language, "en-US");
+        assert!(!v.auto_detect_language);
+        assert_eq!(v.confidence_threshold, 0.7);
+    }
+
+    #[test]
+    fn voice_config_default_tts_settings() {
+        let v = VoiceConfig::default();
+        assert_eq!(v.tts_provider, "openai");
+        assert_eq!(v.voice_id, "alloy");
+        assert_eq!(v.speed, 1.0);
+        assert_eq!(v.pitch, 0.0);
+        assert_eq!(v.volume, 1.0);
+    }
+
+    #[test]
+    fn voice_config_default_wake_word_settings() {
+        let v = VoiceConfig::default();
+        assert!(!v.wake_word_enabled);
+        assert!(v.wake_word.is_none());
+        assert!(v.wake_word_alternatives.is_empty());
+        assert_eq!(v.wake_word_sensitivity, 0.5);
+        assert_eq!(v.silence_duration_ms, 800);
+    }
+
+    #[test]
+    fn voice_config_default_vad_settings() {
+        let v = VoiceConfig::default();
+        assert!(v.vad_enabled);
+        assert_eq!(v.vad_aggressiveness, 2);
+        assert_eq!(v.speech_threshold, 0.5);
+    }
+
+    #[test]
+    fn voice_config_default_conversation_settings() {
+        let v = VoiceConfig::default();
+        assert_eq!(v.conversation_mode, "turn-taking");
+        assert_eq!(v.max_recording_duration, 30);
+        assert_eq!(v.min_recording_duration, 0.5);
+        assert!(!v.playback_confirmation);
+        assert!(v.interruption_enabled);
+    }
+
+    #[test]
+    fn voice_config_default_audio_processing() {
+        let v = VoiceConfig::default();
+        assert!(!v.noise_suppression);
+        assert!(!v.echo_cancellation);
+        assert!(v.auto_gain_control);
+        assert!(!v.normalize_audio);
+    }
+
+    #[test]
+    fn voice_config_default_privacy_settings() {
+        let v = VoiceConfig::default();
+        assert!(!v.store_recordings);
+        assert_eq!(v.recording_retention_days, 7);
+        assert!(!v.encrypt_recordings);
+        assert!(!v.mask_pii);
+    }
+
+    #[test]
+    fn voice_config_default_accessibility_settings() {
+        let v = VoiceConfig::default();
+        assert!(!v.visual_feedback);
+        assert!(v.show_transcription);
+        assert!(!v.verbose_mode);
+    }
+
+    #[test]
+    fn voice_config_default_advanced_settings() {
+        let v = VoiceConfig::default();
+        assert!(v.streaming_enabled);
+        assert_eq!(v.connection_timeout_secs, 10);
+        assert_eq!(v.max_retries, 3);
+        assert!(v.stt_fallback.is_none());
+        assert!(v.tts_fallback.is_none());
+    }
+
+    #[test]
+    fn voice_config_serde_roundtrip() {
+        let v = VoiceConfig {
+            enabled: true,
+            input_device: Some("Microphone (USB)".into()),
+            output_device: Some("Headphones".into()),
+            sample_rate: 44100,
+            channels: 2,
+            buffer_size: 1024,
+            stt_provider: "elevenlabs".into(),
+            stt_model: "whisper-large".into(),
+            language: "es-ES".into(),
+            auto_detect_language: true,
+            confidence_threshold: 0.9,
+            tts_provider: "azure".into(),
+            voice_id: "elvira".into(),
+            speed: 1.2,
+            pitch: 2.0,
+            volume: 1.5,
+            wake_word_enabled: true,
+            wake_word: Some("hola claw".into()),
+            wake_word_alternatives: vec!["oye claw".into()],
+            wake_word_sensitivity: 0.3,
+            silence_duration_ms: 1200,
+            vad_enabled: false,
+            vad_aggressiveness: 3,
+            speech_threshold: 0.7,
+            conversation_mode: "continuous".into(),
+            max_recording_duration: 60,
+            min_recording_duration: 1.0,
+            playback_confirmation: true,
+            interruption_enabled: false,
+            noise_suppression: true,
+            echo_cancellation: true,
+            auto_gain_control: false,
+            normalize_audio: true,
+            store_recordings: true,
+            recording_retention_days: 30,
+            encrypt_recordings: true,
+            mask_pii: true,
+            visual_feedback: true,
+            show_transcription: false,
+            verbose_mode: true,
+            streaming_enabled: false,
+            connection_timeout_secs: 30,
+            max_retries: 5,
+            stt_fallback: Some("google".into()),
+            tts_fallback: Some("amazon".into()),
+        };
+
+        let toml_str = toml::to_string(&v).unwrap();
+        let parsed: VoiceConfig = toml::from_str(&toml_str).unwrap();
+
+        assert!(parsed.enabled);
+        assert_eq!(parsed.input_device.unwrap(), "Microphone (USB)");
+        assert_eq!(parsed.output_device.unwrap(), "Headphones");
+        assert_eq!(parsed.sample_rate, 44100);
+        assert_eq!(parsed.channels, 2);
+        assert_eq!(parsed.buffer_size, 1024);
+        assert_eq!(parsed.stt_provider, "elevenlabs");
+        assert_eq!(parsed.stt_model, "whisper-large");
+        assert_eq!(parsed.language, "es-ES");
+        assert!(parsed.auto_detect_language);
+        assert_eq!(parsed.confidence_threshold, 0.9);
+        assert_eq!(parsed.tts_provider, "azure");
+        assert_eq!(parsed.voice_id, "elvira");
+        assert_eq!(parsed.speed, 1.2);
+        assert_eq!(parsed.pitch, 2.0);
+        assert_eq!(parsed.volume, 1.5);
+        assert!(parsed.wake_word_enabled);
+        assert_eq!(parsed.wake_word.unwrap(), "hola claw");
+        assert_eq!(parsed.wake_word_alternatives.len(), 1);
+        assert_eq!(parsed.wake_word_sensitivity, 0.3);
+        assert_eq!(parsed.silence_duration_ms, 1200);
+        assert!(!parsed.vad_enabled);
+        assert_eq!(parsed.vad_aggressiveness, 3);
+        assert_eq!(parsed.speech_threshold, 0.7);
+        assert_eq!(parsed.conversation_mode, "continuous");
+        assert_eq!(parsed.max_recording_duration, 60);
+        assert_eq!(parsed.min_recording_duration, 1.0);
+        assert!(parsed.playback_confirmation);
+        assert!(!parsed.interruption_enabled);
+        assert!(parsed.noise_suppression);
+        assert!(parsed.echo_cancellation);
+        assert!(!parsed.auto_gain_control);
+        assert!(parsed.normalize_audio);
+        assert!(parsed.store_recordings);
+        assert_eq!(parsed.recording_retention_days, 30);
+        assert!(parsed.encrypt_recordings);
+        assert!(parsed.mask_pii);
+        assert!(parsed.visual_feedback);
+        assert!(!parsed.show_transcription);
+        assert!(parsed.verbose_mode);
+        assert!(!parsed.streaming_enabled);
+        assert_eq!(parsed.connection_timeout_secs, 30);
+        assert_eq!(parsed.max_retries, 5);
+        assert_eq!(parsed.stt_fallback.unwrap(), "google");
+        assert_eq!(parsed.tts_fallback.unwrap(), "amazon");
+    }
+
+    #[test]
+    fn voice_config_toml_partial() {
+        let toml_str = r#"
+enabled = true
+sample_rate = 48000
+wake_word = "hey computer"
+"#;
+        let parsed: VoiceConfig = toml::from_str(toml_str).unwrap();
+        assert!(parsed.enabled);
+        assert_eq!(parsed.sample_rate, 48000);
+        assert_eq!(parsed.wake_word.unwrap(), "hey computer");
+        // All other fields should have defaults
+        assert!(parsed.input_device.is_none());
+        assert_eq!(parsed.stt_provider, "openai");
+        assert_eq!(parsed.tts_provider, "openai");
+        assert!(!parsed.wake_word_enabled);
+    }
+
+    #[test]
+    fn voice_config_toml_empty_uses_defaults() {
+        let toml_str = r#"
+enabled = true
+"#;
+        let parsed: VoiceConfig = toml::from_str(toml_str).unwrap();
+        assert!(parsed.enabled);
+        // All other fields should have defaults
+        assert_eq!(parsed.sample_rate, 16000);
+        assert_eq!(parsed.channels, 1);
+        assert_eq!(parsed.stt_provider, "openai");
+        assert_eq!(parsed.tts_provider, "openai");
+        assert!(!parsed.wake_word_enabled);
+        assert!(parsed.vad_enabled);
+        assert_eq!(parsed.conversation_mode, "turn-taking");
+    }
+
+    #[test]
+    fn voice_config_edge_case_minimal_values() {
+        let v = VoiceConfig {
+            speed: 0.25,
+            volume: 0.0,
+            confidence_threshold: 0.0,
+            speech_threshold: 0.0,
+            wake_word_sensitivity: 0.1,
+            min_recording_duration: 0.1,
+            max_recording_duration: 1,
+            silence_duration_ms: 100,
+            ..VoiceConfig::default()
+        };
+
+        let toml_str = toml::to_string(&v).unwrap();
+        let parsed: VoiceConfig = toml::from_str(&toml_str).unwrap();
+        assert_eq!(parsed.speed, 0.25);
+        assert_eq!(parsed.volume, 0.0);
+        assert_eq!(parsed.confidence_threshold, 0.0);
+        assert_eq!(parsed.speech_threshold, 0.0);
+        assert_eq!(parsed.wake_word_sensitivity, 0.1);
+        assert_eq!(parsed.min_recording_duration, 0.1);
+        assert_eq!(parsed.max_recording_duration, 1);
+        assert_eq!(parsed.silence_duration_ms, 100);
+    }
+
+    #[test]
+    fn voice_config_edge_case_maximal_values() {
+        let v = VoiceConfig {
+            speed: 4.0,
+            volume: 2.0,
+            confidence_threshold: 1.0,
+            speech_threshold: 1.0,
+            wake_word_sensitivity: 0.9,
+            pitch: 20.0,
+            vad_aggressiveness: 3,
+            max_recording_duration: 300,
+            connection_timeout_secs: 300,
+            max_retries: 10,
+            ..VoiceConfig::default()
+        };
+
+        let toml_str = toml::to_string(&v).unwrap();
+        let parsed: VoiceConfig = toml::from_str(&toml_str).unwrap();
+        assert_eq!(parsed.speed, 4.0);
+        assert_eq!(parsed.volume, 2.0);
+        assert_eq!(parsed.confidence_threshold, 1.0);
+        assert_eq!(parsed.speech_threshold, 1.0);
+        assert_eq!(parsed.wake_word_sensitivity, 0.9);
+        assert_eq!(parsed.pitch, 20.0);
+        assert_eq!(parsed.vad_aggressiveness, 3);
+        assert_eq!(parsed.max_recording_duration, 300);
+        assert_eq!(parsed.connection_timeout_secs, 300);
+        assert_eq!(parsed.max_retries, 10);
+    }
+
+    #[test]
+    fn voice_config_special_characters_in_device_names() {
+        let v = VoiceConfig {
+            input_device: Some("Microphone (USB Audio)".into()),
+            output_device: Some("Headphones - Bluetooth™".into()),
+            ..VoiceConfig::default()
+        };
+
+        let toml_str = toml::to_string(&v).unwrap();
+        let parsed: VoiceConfig = toml::from_str(&toml_str).unwrap();
+        assert_eq!(parsed.input_device.unwrap(), "Microphone (USB Audio)");
+        assert_eq!(parsed.output_device.unwrap(), "Headphones - Bluetooth™");
+    }
+
+    #[test]
+    fn voice_config_multiple_wake_word_alternatives() {
+        let toml_str = r#"
+enabled = true
+wake_word = "hey zeroclaw"
+wake_word_alternatives = ["ok claw", "computer", "assistant"]
+"#;
+        let parsed: VoiceConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(parsed.wake_word.unwrap(), "hey zeroclaw");
+        assert_eq!(parsed.wake_word_alternatives.len(), 3);
+        assert_eq!(parsed.wake_word_alternatives[0], "ok claw");
+        assert_eq!(parsed.wake_word_alternatives[1], "computer");
+        assert_eq!(parsed.wake_word_alternatives[2], "assistant");
+    }
+
+    #[test]
+    fn channels_config_with_voice_enabled() {
+        let c = ChannelsConfig {
+            voice: Some(VoiceConfig {
+                enabled: true,
+                ..VoiceConfig::default()
+            }),
+            ..ChannelsConfig::default()
+        };
+        let toml_str = toml::to_string_pretty(&c).unwrap();
+        let parsed: ChannelsConfig = toml::from_str(&toml_str).unwrap();
+        assert!(parsed.voice.is_some());
+        let voice = parsed.voice.unwrap();
+        assert!(voice.enabled);
+        assert_eq!(voice.stt_provider, "openai");
+    }
+
+    #[test]
+    fn voice_config_backward_compat_missing_section() {
+        let minimal = r#"
+workspace_dir = "/tmp/ws"
+config_path = "/tmp/config.toml"
+default_temperature = 0.7
+"#;
+        let parsed: Config = toml::from_str(minimal).unwrap();
+        assert!(parsed.channels_config.voice.is_none());
+    }
+
+    #[test]
+    fn voice_config_conversation_mode_variants() {
+        let modes = vec!["turn-taking", "continuous", "push-to-talk"];
+        for mode in modes {
+            let toml_str = format!(r#"
+enabled = true
+conversation_mode = "{}"
+"#, mode);
+            let parsed: VoiceConfig = toml::from_str(&toml_str).unwrap();
+            assert_eq!(parsed.conversation_mode, mode);
+        }
+    }
+
+    #[test]
+    fn voice_config_stt_provider_variants() {
+        let providers = vec!["openai", "google", "azure", "deepgram", "whisper_local"];
+        for provider in providers {
+            let toml_str = format!(r#"
+enabled = true
+stt_provider = "{}"
+"#, provider);
+            let parsed: VoiceConfig = toml::from_str(&toml_str).unwrap();
+            assert_eq!(parsed.stt_provider, provider);
+        }
+    }
+
+    #[test]
+    fn voice_config_tts_provider_variants() {
+        let providers = vec!["openai", "elevenlabs", "google", "azure", "amazon"];
+        for provider in providers {
+            let toml_str = format!(r#"
+enabled = true
+tts_provider = "{}"
+"#, provider);
+            let parsed: VoiceConfig = toml::from_str(&toml_str).unwrap();
+            assert_eq!(parsed.tts_provider, provider);
+        }
+    }
+
+    #[test]
+    fn voice_config_negative_pitch() {
+        let toml_str = r#"
+enabled = true
+pitch = -10.5
+"#;
+        let parsed: VoiceConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(parsed.pitch, -10.5);
+    }
+
+    #[test]
+    fn voice_config_json_compat() {
+        let v = VoiceConfig {
+            enabled: true,
+            input_device: Some("Mic".into()),
+            ..VoiceConfig::default()
+        };
+        let json = serde_json::to_string(&v).unwrap();
+        let parsed: VoiceConfig = serde_json::from_str(&json).unwrap();
+        assert!(parsed.enabled);
+        assert_eq!(parsed.input_device.unwrap(), "Mic");
     }
 }
