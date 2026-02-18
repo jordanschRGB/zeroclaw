@@ -8,7 +8,10 @@ use crate::providers::traits::{
 };
 use async_trait::async_trait;
 use futures_util::{stream, StreamExt};
-use reqwest::Client;
+use reqwest::{
+    header::{HeaderMap, HeaderValue, USER_AGENT},
+    Client,
+};
 use serde::{Deserialize, Serialize};
 
 /// A provider that speaks the OpenAI-compatible chat completions API.
@@ -43,18 +46,7 @@ impl OpenAiCompatibleProvider {
         credential: Option<&str>,
         auth_style: AuthStyle,
     ) -> Self {
-        Self {
-            name: name.to_string(),
-            base_url: base_url.trim_end_matches('/').to_string(),
-            credential: credential.map(ToString::to_string),
-            auth_header: auth_style,
-            supports_responses_fallback: true,
-            client: Client::builder()
-                .timeout(std::time::Duration::from_secs(120))
-                .connect_timeout(std::time::Duration::from_secs(10))
-                .build()
-                .unwrap_or_else(|_| Client::new()),
-        }
+        Self::new_with_options(name, base_url, credential, auth_style, true, None)
     }
 
     /// Same as `new` but skips the /v1/responses fallback on 404.
@@ -65,18 +57,62 @@ impl OpenAiCompatibleProvider {
         credential: Option<&str>,
         auth_style: AuthStyle,
     ) -> Self {
+        Self::new_with_options(name, base_url, credential, auth_style, false, None)
+    }
+
+    /// Create a provider with a custom User-Agent header.
+    ///
+    /// Some providers (for example Kimi Code) require a specific User-Agent
+    /// for request routing and policy enforcement.
+    pub fn new_with_user_agent(
+        name: &str,
+        base_url: &str,
+        credential: Option<&str>,
+        auth_style: AuthStyle,
+        user_agent: &str,
+    ) -> Self {
+        Self::new_with_options(
+            name,
+            base_url,
+            credential,
+            auth_style,
+            true,
+            Some(user_agent),
+        )
+    }
+
+    fn new_with_options(
+        name: &str,
+        base_url: &str,
+        credential: Option<&str>,
+        auth_style: AuthStyle,
+        supports_responses_fallback: bool,
+        user_agent: Option<&str>,
+    ) -> Self {
         Self {
             name: name.to_string(),
             base_url: base_url.trim_end_matches('/').to_string(),
             credential: credential.map(ToString::to_string),
             auth_header: auth_style,
-            supports_responses_fallback: false,
-            client: Client::builder()
-                .timeout(std::time::Duration::from_secs(120))
-                .connect_timeout(std::time::Duration::from_secs(10))
-                .build()
-                .unwrap_or_else(|_| Client::new()),
+            supports_responses_fallback,
+            client: Self::build_client(user_agent),
         }
+    }
+
+    fn build_client(user_agent: Option<&str>) -> Client {
+        let mut client_builder = Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .connect_timeout(std::time::Duration::from_secs(10));
+
+        if let Some(ua) = user_agent {
+            let mut headers = HeaderMap::new();
+            if let Ok(value) = HeaderValue::from_str(ua) {
+                headers.insert(USER_AGENT, value);
+                client_builder = client_builder.default_headers(headers);
+            }
+        }
+
+        client_builder.build().unwrap_or_else(|_| Client::new())
     }
 
     /// Build the full URL for chat completions, detecting if base_url already includes the path.
