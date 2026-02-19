@@ -161,6 +161,10 @@ pub struct DelegateAgentConfig {
     /// Temperature override
     #[serde(default)]
     pub temperature: Option<f64>,
+    /// Persona template: "worker" (default), "guppi", "reviewer", "prime".
+    /// Selects which compiled system prompt template to use.
+    #[serde(default)]
+    pub persona: Option<String>,
     /// Max recursion depth for nested delegation
     #[serde(default = "default_max_depth")]
     pub max_depth: u32,
@@ -3461,6 +3465,7 @@ tool_dispatcher = "xml"
                 system_prompt: None,
                 api_key: Some("agent-credential".into()),
                 temperature: None,
+                persona: None,
                 max_depth: 3,
                 denied_tools: Vec::new(),
                 allowed_tools: Vec::new(),

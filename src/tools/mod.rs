@@ -455,6 +455,7 @@ mod tests {
                 system_prompt: None,
                 api_key: None,
                 temperature: None,
+                persona: None,
                 max_depth: 3,
                 denied_tools: Vec::new(),
                 allowed_tools: Vec::new(),

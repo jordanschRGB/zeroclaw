@@ -14,6 +14,7 @@ pub use self::multi::MultiObserver;
 pub use noop::NoopObserver;
 pub use otel::OtelObserver;
 pub use prometheus::PrometheusObserver;
+#[allow(unused_imports)]
 pub use traits::{Observer, ObserverEvent, InterventionHandler, InterventionVerdict, InterventionContext, InterventionChain, MessageDirection, NoopInterventionHandler};
 pub use handlers::{TripwireHandler, SingleActionHandler, DepthGuardHandler, ConvergenceDetector};
 #[allow(unused_imports)]

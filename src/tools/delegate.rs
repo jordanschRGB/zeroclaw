@@ -238,9 +238,10 @@ impl Tool for DelegateTool {
             format!("[Context]\n{context}\n\n[Task]\n{prompt}")
         };
 
-        // ── Persona scaffolding: delegate system prompt from compiled templates ──
-        let effective_system_prompt = persona::delegate_system_prompt(
+        // ── Persona scaffolding: select compiled template based on agent persona ──
+        let effective_system_prompt = persona::persona_system_prompt(
             agent_name,
+            agent_config.persona.as_deref(),
             agent_config.system_prompt.as_deref(),
         );
 
@@ -325,6 +326,7 @@ mod tests {
                 system_prompt: Some("You are a research assistant.".to_string()),
                 api_key: None,
                 temperature: Some(0.3),
+                persona: None,
                 max_depth: 3,
                 denied_tools: Vec::new(),
                 allowed_tools: Vec::new(),
@@ -338,6 +340,7 @@ mod tests {
                 system_prompt: None,
                 api_key: Some("delegate-test-credential".to_string()),
                 temperature: None,
+                persona: None,
                 max_depth: 2,
                 denied_tools: Vec::new(),
                 allowed_tools: Vec::new(),
@@ -447,6 +450,7 @@ mod tests {
                 system_prompt: None,
                 api_key: None,
                 temperature: None,
+                persona: None,
                 max_depth: 3,
                 denied_tools: Vec::new(),
                 allowed_tools: Vec::new(),
@@ -552,6 +556,7 @@ mod tests {
                 system_prompt: None,
                 api_key: None,
                 temperature: None,
+                persona: None,
                 max_depth: 3,
                 denied_tools: Vec::new(),
                 allowed_tools: Vec::new(),
@@ -586,6 +591,7 @@ mod tests {
                 system_prompt: None,
                 api_key: None,
                 temperature: None,
+                persona: None,
                 max_depth: 3,
                 denied_tools: Vec::new(),
                 allowed_tools: Vec::new(),

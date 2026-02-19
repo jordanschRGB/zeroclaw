@@ -76,6 +76,10 @@ pub trait Observer: Send + Sync + 'static {
     /// Human-readable name of this observer
     fn name(&self) -> &str;
 
+    /// Reset per-turn state. Called at the start of each agent turn.
+    /// Default: no-op. Override for stateful handlers.
+    fn reset(&self) {}
+
     /// Downcast to `Any` for backend-specific operations
     fn as_any(&self) -> &dyn std::any::Any;
 }
@@ -121,6 +125,10 @@ pub struct InterventionContext {
 pub trait InterventionHandler: Send + Sync + 'static {
     fn intercept(&self, content: &str, ctx: &InterventionContext) -> InterventionVerdict;
     fn name(&self) -> &str;
+
+    /// Reset per-turn state. Called at the start of each agent turn.
+    /// Default: no-op. Override for stateful handlers.
+    fn reset(&self) {}
 }
 
 /// No-op handler that allows everything.
@@ -168,6 +176,13 @@ impl InterventionChain {
     }
 
     pub fn is_empty(&self) -> bool { self.handlers.is_empty() }
+
+    /// Reset all handlers (call at the start of each agent turn).
+    pub fn reset_all(&self) {
+        for handler in &self.handlers {
+            handler.reset();
+        }
+    }
 }
 
 impl Default for InterventionChain {

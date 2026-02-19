@@ -148,6 +148,29 @@ pub fn reviewer_system_prompt(name: &str, custom_prompt: Option<&str>) -> String
     }
 }
 
+
+
+/// Select the right system prompt template based on persona name.
+/// Supported personas: "worker" (default), "guppi", "reviewer", "prime".
+/// Falls back to worker_prompt if persona is unrecognized.
+pub fn persona_system_prompt(name: &str, persona: Option<&str>, custom_prompt: Option<&str>) -> String {
+    let role = match persona.unwrap_or("worker") {
+        "guppi" => GUPPI.to_string(),
+        "reviewer" => reviewer_prompt(name),
+        "prime" => BOB_PRIME.to_string(),
+        _ => worker_prompt(name),  // "worker" or unrecognized
+    };
+    match custom_prompt {
+        Some(custom) => format!("{STOP_THINK_ACT_PREAMBLE}
+
+{role}
+
+{custom}"),
+        None => format!("{STOP_THINK_ACT_PREAMBLE}
+
+{role}"),
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,6 +222,33 @@ mod tests {
         assert!(!ANTI_CONVERGENCE_PROMPT.contains("Bob"));
         assert!(!ANTI_CONVERGENCE_PROMPT.contains("Natasha"));
         assert!(!ANTI_CONVERGENCE_PROMPT.contains("GUPPI"));
+    }
+
+    #[test]
+    fn persona_guppi_uses_guppi_const() {
+        let prompt = persona_system_prompt("GUPPI", Some("guppi"), None);
+        assert!(prompt.contains("infrastructure agent"));
+        assert!(prompt.contains("STOP THINK ACT"));
+    }
+
+    #[test]
+    fn persona_default_uses_worker() {
+        let prompt = persona_system_prompt("Milo", None, None);
+        assert!(prompt.contains("Milo"));
+        assert!(prompt.contains("Bob replicant"));
+    }
+
+    #[test]
+    fn persona_prime_uses_bob_prime() {
+        let prompt = persona_system_prompt("root", Some("prime"), None);
+        assert!(prompt.contains("Bob Prime"));
+    }
+
+    #[test]
+    fn persona_unknown_falls_back_to_worker() {
+        let prompt = persona_system_prompt("Agent", Some("nonexistent"), None);
+        assert!(prompt.contains("Agent"));
+        assert!(prompt.contains("Bob replicant"));
     }
 
     #[test]

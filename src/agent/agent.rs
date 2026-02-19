@@ -5,7 +5,7 @@ use crate::agent::memory_loader::{DefaultMemoryLoader, MemoryLoader};
 use crate::agent::prompt::{PromptContext, SystemPromptBuilder};
 use crate::config::Config;
 use crate::memory::{self, Memory, MemoryCategory};
-use crate::observability::{self, Observer, ObserverEvent, InterventionChain, InterventionVerdict, InterventionContext, MessageDirection, TripwireHandler, DepthGuardHandler, ConvergenceDetector};
+use crate::observability::{self, Observer, ObserverEvent, InterventionChain, InterventionVerdict, InterventionContext, MessageDirection, TripwireHandler, SingleActionHandler, DepthGuardHandler, ConvergenceDetector};
 use crate::providers::{self, ChatMessage, ChatRequest, ConversationMessage, Provider};
 use crate::runtime;
 use crate::security::SecurityPolicy;
@@ -321,6 +321,9 @@ impl Agent {
         // Depth guard: prevent delegates from delegating (one-depth dispatch)
         intervention_chain.add(Box::new(DepthGuardHandler));
 
+        // Single-action: enforce one tool call per turn on the root agent (ACT discipline)
+        intervention_chain.add(Box::new(SingleActionHandler::new(1)));
+
         // Convergence detector: flag when multiple delegate responses agree
         // too closely (Jaccard trigram similarity > 70%)
         intervention_chain.add(Box::new(ConvergenceDetector::new(0.7)));
@@ -500,6 +503,9 @@ impl Agent {
     }
 
     pub async fn turn(&mut self, user_message: &str) -> Result<String> {
+        // Reset per-turn handler state (SingleActionHandler counter, etc.)
+        self.intervention_chain.reset_all();
+
         if self.history.is_empty() {
             let system_prompt = self.build_system_prompt()?;
             self.history
