@@ -1845,8 +1845,8 @@ pub async fn start_channels(config: Config) -> Result<()> {
             let mut c = InterventionChain::new();
             c.add(Box::new(TripwireHandler::from_strings(&config.autonomy.tripwire_patterns)));
             c.add(Box::new(DepthGuardHandler));
-            c.add(Box::new(SingleActionHandler::new(1)));
-            c.add(Box::new(ConvergenceDetector::new(0.7)));
+            c.add(Box::new(SingleActionHandler::new(config.autonomy.max_tools_per_turn)));
+            c.add(Box::new(ConvergenceDetector::new(config.autonomy.convergence_threshold)));
             Arc::new(c)
         },
     });

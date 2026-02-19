@@ -1206,8 +1206,8 @@ pub async fn run(
         TripwireHandler::from_strings(&config.autonomy.tripwire_patterns),
     ));
     chain.add(Box::new(DepthGuardHandler));
-    chain.add(Box::new(SingleActionHandler::new(1)));
-    chain.add(Box::new(ConvergenceDetector::new(0.7)));
+    chain.add(Box::new(SingleActionHandler::new(config.autonomy.max_tools_per_turn)));
+    chain.add(Box::new(ConvergenceDetector::new(config.autonomy.convergence_threshold)));
     let chain = chain; // freeze
 
     // ── Memory (the brain) ────────────────────────────────────────
@@ -1823,8 +1823,8 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
         TripwireHandler::from_strings(&config.autonomy.tripwire_patterns),
     ));
     chain.add(Box::new(DepthGuardHandler));
-    chain.add(Box::new(SingleActionHandler::new(1)));
-    chain.add(Box::new(ConvergenceDetector::new(0.7)));
+    chain.add(Box::new(SingleActionHandler::new(config.autonomy.max_tools_per_turn)));
+    chain.add(Box::new(ConvergenceDetector::new(config.autonomy.convergence_threshold)));
 
     agent_turn(
         provider.as_ref(),

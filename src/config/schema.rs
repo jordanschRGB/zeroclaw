@@ -1551,7 +1551,22 @@ pub struct AutonomyConfig {
     /// Example: ["(?i)rm\s+-rf\s+/", "(?i)DROP\s+TABLE"]
     #[serde(default)]
     pub tripwire_patterns: Vec<String>,
+
+    /// Maximum tool calls allowed per agent turn before the InterventionChain
+    /// drops further calls. Prevents runaway tool-use loops.
+    /// Default: 1 (conservative). Set higher (3-5) for multi-tool workflows.
+    #[serde(default = "default_max_tools_per_turn")]
+    pub max_tools_per_turn: u32,
+
+    /// Jaccard similarity threshold for convergence detection.
+    /// When consecutive tool results exceed this threshold, the agent
+    /// is likely looping. Range: 0.0-1.0. Default: 0.7.
+    #[serde(default = "default_convergence_threshold")]
+    pub convergence_threshold: f64,
 }
+
+fn default_max_tools_per_turn() -> u32 { 1 }
+fn default_convergence_threshold() -> f64 { 0.7 }
 
 fn default_auto_approve() -> Vec<String> {
     vec!["file_read".into(), "memory_recall".into()]
@@ -1607,6 +1622,8 @@ impl Default for AutonomyConfig {
             auto_approve: default_auto_approve(),
             always_ask: default_always_ask(),
             tripwire_patterns: Vec::new(),
+            max_tools_per_turn: default_max_tools_per_turn(),
+            convergence_threshold: default_convergence_threshold(),
         }
     }
 }
