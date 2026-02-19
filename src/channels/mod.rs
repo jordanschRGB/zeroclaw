@@ -120,6 +120,7 @@ struct ChannelRuntimeContext {
     reliability: Arc<crate::config::ReliabilityConfig>,
     provider_runtime_options: providers::ProviderRuntimeOptions,
     workspace_dir: Arc<PathBuf>,
+    security: Arc<SecurityPolicy>,
 }
 
 fn conversation_memory_key(msg: &traits::ChannelMessage) -> String {
@@ -710,6 +711,7 @@ async fn process_channel_message(ctx: Arc<ChannelRuntimeContext>, msg: traits::C
             msg.channel.as_str(),
             ctx.max_tool_iterations,
             delta_tx,
+            &ctx.security,
         ),
     )
     .await;
@@ -1835,6 +1837,7 @@ pub async fn start_channels(config: Config) -> Result<()> {
         reliability: Arc::new(config.reliability.clone()),
         provider_runtime_options,
         workspace_dir: Arc::new(config.workspace_dir.clone()),
+        security: Arc::clone(&security),
     });
 
     run_message_dispatch_loop(rx, runtime_ctx, max_in_flight_messages).await;
@@ -2225,6 +2228,7 @@ mod tests {
             reliability: Arc::new(crate::config::ReliabilityConfig::default()),
             provider_runtime_options: providers::ProviderRuntimeOptions::default(),
             workspace_dir: Arc::new(std::env::temp_dir()),
+            security: Arc::new(SecurityPolicy::default()),
         });
 
         process_channel_message(
@@ -2277,6 +2281,7 @@ mod tests {
             reliability: Arc::new(crate::config::ReliabilityConfig::default()),
             provider_runtime_options: providers::ProviderRuntimeOptions::default(),
             workspace_dir: Arc::new(std::env::temp_dir()),
+            security: Arc::new(SecurityPolicy::default()),
         });
 
         process_channel_message(
@@ -2338,6 +2343,7 @@ mod tests {
             reliability: Arc::new(crate::config::ReliabilityConfig::default()),
             provider_runtime_options: providers::ProviderRuntimeOptions::default(),
             workspace_dir: Arc::new(std::env::temp_dir()),
+            security: Arc::new(SecurityPolicy::default()),
         });
 
         process_channel_message(
@@ -2420,6 +2426,7 @@ mod tests {
             reliability: Arc::new(crate::config::ReliabilityConfig::default()),
             provider_runtime_options: providers::ProviderRuntimeOptions::default(),
             workspace_dir: Arc::new(std::env::temp_dir()),
+            security: Arc::new(SecurityPolicy::default()),
         });
 
         process_channel_message(
@@ -2478,6 +2485,7 @@ mod tests {
             reliability: Arc::new(crate::config::ReliabilityConfig::default()),
             provider_runtime_options: providers::ProviderRuntimeOptions::default(),
             workspace_dir: Arc::new(std::env::temp_dir()),
+            security: Arc::new(SecurityPolicy::default()),
         });
 
         process_channel_message(
@@ -2531,6 +2539,7 @@ mod tests {
             reliability: Arc::new(crate::config::ReliabilityConfig::default()),
             provider_runtime_options: providers::ProviderRuntimeOptions::default(),
             workspace_dir: Arc::new(std::env::temp_dir()),
+            security: Arc::new(SecurityPolicy::default()),
         });
 
         process_channel_message(
@@ -2635,6 +2644,7 @@ mod tests {
             reliability: Arc::new(crate::config::ReliabilityConfig::default()),
             provider_runtime_options: providers::ProviderRuntimeOptions::default(),
             workspace_dir: Arc::new(std::env::temp_dir()),
+            security: Arc::new(SecurityPolicy::default()),
         });
 
         let (tx, rx) = tokio::sync::mpsc::channel::<traits::ChannelMessage>(4);
@@ -2705,6 +2715,7 @@ mod tests {
             reliability: Arc::new(crate::config::ReliabilityConfig::default()),
             provider_runtime_options: providers::ProviderRuntimeOptions::default(),
             workspace_dir: Arc::new(std::env::temp_dir()),
+            security: Arc::new(SecurityPolicy::default()),
         });
 
         process_channel_message(
@@ -3095,6 +3106,7 @@ mod tests {
             reliability: Arc::new(crate::config::ReliabilityConfig::default()),
             provider_runtime_options: providers::ProviderRuntimeOptions::default(),
             workspace_dir: Arc::new(std::env::temp_dir()),
+            security: Arc::new(SecurityPolicy::default()),
         });
 
         process_channel_message(

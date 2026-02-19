@@ -827,6 +827,7 @@ pub(crate) async fn agent_turn(
     temperature: f64,
     silent: bool,
     max_tool_iterations: usize,
+    security: &SecurityPolicy,
 ) -> Result<String> {
     run_tool_call_loop(
         provider,
@@ -841,6 +842,7 @@ pub(crate) async fn agent_turn(
         "channel",
         max_tool_iterations,
         None,
+        security,
     )
     .await
 }
@@ -861,6 +863,7 @@ pub(crate) async fn run_tool_call_loop(
     channel_name: &str,
     max_tool_iterations: usize,
     on_delta: Option<tokio::sync::mpsc::Sender<String>>,
+    security: &SecurityPolicy,
 ) -> Result<String> {
     let max_iterations = if max_tool_iterations == 0 {
         DEFAULT_MAX_TOOL_ITERATIONS
@@ -871,6 +874,15 @@ pub(crate) async fn run_tool_call_loop(
     let tool_specs: Vec<crate::tools::ToolSpec> =
         tools_registry.iter().map(|tool| tool.spec()).collect();
     let use_native_tools = provider.supports_native_tools() && !tool_specs.is_empty();
+
+    // ── Three-layer guardrails: check input before first LLM call ──
+    // Check the last user message for tripwire patterns
+    if let Some(last_user) = history.iter().rev().find(|m| m.role == "user") {
+        if let Err(reason) = security.check_input(&last_user.content) {
+            tracing::warn!(reason = %reason, "Input guardrail triggered");
+            return Ok(format!("DENIED: {reason}"));
+        }
+    }
 
     for _iteration in 0..max_iterations {
         observer.record_event(&ObserverEvent::LlmRequest {
@@ -958,6 +970,12 @@ pub(crate) async fn run_tool_call_loop(
         };
 
         if tool_calls.is_empty() {
+            // ── Three-layer guardrails: check output ──
+            if let Err(reason) = security.check_output(&display_text) {
+                tracing::warn!(reason = %reason, "Output guardrail triggered");
+                return Ok(format!("DENIED: {reason}"));
+            }
+
             // No tool calls — this is the final response.
             // If a streaming sender is provided, relay the text in small chunks
             // so the channel can progressively update the draft message.
@@ -1021,6 +1039,20 @@ pub(crate) async fn run_tool_call_loop(
                         continue;
                     }
                 }
+            }
+
+            // ── Three-layer guardrails: check tool ──
+            if let Err(reason) = security.check_tool(&call.name) {
+                tracing::warn!(tool = %call.name, reason = %reason, "Tool guardrail triggered");
+                individual_results.push(format!("DENIED: {reason}"));
+                let _ = writeln!(
+                    tool_results,
+                    "<tool_result name=\"{}\">
+DENIED: {}
+</tool_result>",
+                    call.name, reason
+                );
+                continue;
             }
 
             observer.record_event(&ObserverEvent::ToolCallStart {
@@ -1398,6 +1430,7 @@ pub async fn run(
             "cli",
             config.agent.max_tool_iterations,
             None,
+            &security,
         )
         .await?;
         final_output = response.clone();
@@ -1524,6 +1557,7 @@ pub async fn run(
                 "cli",
                 config.agent.max_tool_iterations,
                 None,
+                &security,
             )
             .await
             {
@@ -1743,6 +1777,7 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
         config.default_temperature,
         true,
         config.agent.max_tool_iterations,
+        &security,
     )
     .await
 }
