@@ -1,3 +1,4 @@
+use crate::persona;
 use super::traits::{Tool, ToolResult};
 use crate::config::DelegateAgentConfig;
 use crate::providers::{self, Provider};
@@ -182,6 +183,31 @@ impl Tool for DelegateTool {
             });
         }
 
+        // ── Per-agent tool scoping ──
+        let scoped_security = self.security.scoped_for_agent(
+            agent_name,
+            agent_config.denied_tools.clone(),
+            agent_config.allowed_tools.clone(),
+        );
+
+        // ── Tripwire: check prompt content before sending to sub-agent ──
+        if let Err(halt_reason) = scoped_security.check_input(prompt) {
+            return Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some(format!("Delegation blocked: {halt_reason}")),
+            });
+        }
+        if !context.is_empty() {
+            if let Err(halt_reason) = scoped_security.check_input(context) {
+                return Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(format!("Delegation context blocked: {halt_reason}")),
+                });
+            }
+        }
+
         // Create provider for this agent
         let provider_credential_owned = agent_config
             .api_key
@@ -212,13 +238,19 @@ impl Tool for DelegateTool {
             format!("[Context]\n{context}\n\n[Task]\n{prompt}")
         };
 
+        // ── Persona scaffolding: delegate system prompt from compiled templates ──
+        let effective_system_prompt = persona::delegate_system_prompt(
+            agent_name,
+            agent_config.system_prompt.as_deref(),
+        );
+
         let temperature = agent_config.temperature.unwrap_or(0.7);
 
         // Wrap the provider call in a timeout to prevent indefinite blocking
         let result = tokio::time::timeout(
             Duration::from_secs(DELEGATE_TIMEOUT_SECS),
             provider.chat_with_system(
-                agent_config.system_prompt.as_deref(),
+                Some(&effective_system_prompt),
                 &full_prompt,
                 &agent_config.model,
                 temperature,
@@ -244,6 +276,15 @@ impl Tool for DelegateTool {
                 let mut rendered = response;
                 if rendered.trim().is_empty() {
                     rendered = "[Empty response]".to_string();
+                }
+
+                // ── Tripwire: check sub-agent output ──
+                if let Err(halt_reason) = scoped_security.check_output(&rendered) {
+                    return Ok(ToolResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some(format!("Delegation output blocked: {halt_reason}")),
+                    });
                 }
 
                 Ok(ToolResult {
@@ -285,6 +326,8 @@ mod tests {
                 api_key: None,
                 temperature: Some(0.3),
                 max_depth: 3,
+                denied_tools: Vec::new(),
+                allowed_tools: Vec::new(),
             },
         );
         agents.insert(
@@ -296,6 +339,8 @@ mod tests {
                 api_key: Some("delegate-test-credential".to_string()),
                 temperature: None,
                 max_depth: 2,
+                denied_tools: Vec::new(),
+                allowed_tools: Vec::new(),
             },
         );
         agents
@@ -403,6 +448,8 @@ mod tests {
                 api_key: None,
                 temperature: None,
                 max_depth: 3,
+                denied_tools: Vec::new(),
+                allowed_tools: Vec::new(),
             },
         );
         let tool = DelegateTool::new(agents, None, test_security());
@@ -506,6 +553,8 @@ mod tests {
                 api_key: None,
                 temperature: None,
                 max_depth: 3,
+                denied_tools: Vec::new(),
+                allowed_tools: Vec::new(),
             },
         );
         let tool = DelegateTool::new(agents, None, test_security());
@@ -538,6 +587,8 @@ mod tests {
                 api_key: None,
                 temperature: None,
                 max_depth: 3,
+                denied_tools: Vec::new(),
+                allowed_tools: Vec::new(),
             },
         );
         let tool = DelegateTool::new(agents, None, test_security());

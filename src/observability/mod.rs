@@ -5,6 +5,7 @@ pub mod otel;
 pub mod prometheus;
 pub mod traits;
 pub mod verbose;
+pub mod handlers;
 
 #[allow(unused_imports)]
 pub use self::log::LogObserver;
@@ -13,7 +14,8 @@ pub use self::multi::MultiObserver;
 pub use noop::NoopObserver;
 pub use otel::OtelObserver;
 pub use prometheus::PrometheusObserver;
-pub use traits::{Observer, ObserverEvent};
+pub use traits::{Observer, ObserverEvent, InterventionHandler, InterventionVerdict, InterventionContext, InterventionChain, MessageDirection, NoopInterventionHandler};
+pub use handlers::{TripwireHandler, SingleActionHandler, DepthGuardHandler, ConvergenceDetector};
 #[allow(unused_imports)]
 pub use verbose::VerboseObserver;
 

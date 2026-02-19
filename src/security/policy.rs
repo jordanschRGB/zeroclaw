@@ -1,4 +1,5 @@
 use parking_lot::Mutex;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -89,6 +90,16 @@ pub struct SecurityPolicy {
     pub require_approval_for_medium_risk: bool,
     pub block_high_risk_commands: bool,
     pub tracker: ActionTracker,
+    /// Identity of the agent this policy is bound to (None = root/prime).
+    pub agent_id: Option<String>,
+    /// Compiled tripwire patterns. If any match input/output content,
+    /// the operation is halted immediately.
+    pub tripwire_patterns: Vec<Regex>,
+    /// Per-agent tool deny list (tool names or "group:xxx").
+    pub agent_denied_tools: Vec<String>,
+    /// Per-agent tool allow list. If non-empty, only these tools are permitted.
+    /// Takes precedence over agent_denied_tools.
+    pub agent_allowed_tools: Vec<String>,
 }
 
 impl Default for SecurityPolicy {
@@ -138,6 +149,10 @@ impl Default for SecurityPolicy {
             require_approval_for_medium_risk: true,
             block_high_risk_commands: true,
             tracker: ActionTracker::new(),
+            agent_id: None,
+            tripwire_patterns: Vec::new(),
+            agent_denied_tools: Vec::new(),
+            agent_allowed_tools: Vec::new(),
         }
     }
 }
@@ -576,11 +591,98 @@ impl SecurityPolicy {
         self.tracker.count() >= self.max_actions_per_hour as usize
     }
 
+    // ── Three-Layer Guardrails (check_input / check_tool / check_output) ──
+
+    /// Check input content against tripwire patterns.
+    /// Returns Err with the matching pattern if a tripwire is triggered.
+    pub fn check_input(&self, content: &str) -> Result<(), String> {
+        for pattern in &self.tripwire_patterns {
+            if pattern.is_match(content) {
+                return Err(format!(
+                    "TRIPWIRE HALT: input matched forbidden pattern /{}/{}",
+                    pattern.as_str(),
+                    self.agent_id.as_deref().map(|id| format!(" [agent={}]", id)).unwrap_or_default()
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Check if a tool is allowed for the current agent identity.
+    /// Default-deny when allowed_tools is non-empty.
+    /// Default-allow with deny list when only denied_tools is set.
+    pub fn check_tool(&self, tool_name: &str) -> Result<(), String> {
+        // Allow-list takes precedence (default-deny)
+        if !self.agent_allowed_tools.is_empty() {
+            if !self.agent_allowed_tools.iter().any(|t| t == tool_name) {
+                return Err(format!(
+                    "Tool {} not in allow list for agent {}",
+                    tool_name,
+                    self.agent_id.as_deref().unwrap_or("root")
+                ));
+            }
+            return Ok(());
+        }
+
+        // Deny-list (default-allow)
+        if self.agent_denied_tools.iter().any(|t| t == tool_name) {
+            return Err(format!(
+                "Tool {} denied for agent {}",
+                tool_name,
+                self.agent_id.as_deref().unwrap_or("root")
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Check output content against tripwire patterns.
+    /// Returns Err with the matching pattern if a tripwire is triggered.
+    pub fn check_output(&self, content: &str) -> Result<(), String> {
+        for pattern in &self.tripwire_patterns {
+            if pattern.is_match(content) {
+                return Err(format!(
+                    "TRIPWIRE HALT: output matched forbidden pattern /{}/{}",
+                    pattern.as_str(),
+                    self.agent_id.as_deref().map(|id| format!(" [agent={}]", id)).unwrap_or_default()
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Create a scoped policy for a delegate agent.
+    /// Inherits base policy but overlays agent-specific restrictions.
+    pub fn scoped_for_agent(
+        &self,
+        agent_id: &str,
+        denied_tools: Vec<String>,
+        allowed_tools: Vec<String>,
+    ) -> Self {
+        let mut scoped = self.clone();
+        scoped.agent_id = Some(agent_id.to_string());
+        scoped.agent_denied_tools = denied_tools;
+        scoped.agent_allowed_tools = allowed_tools;
+        scoped
+    }
+
     /// Build from config sections
     pub fn from_config(
         autonomy_config: &crate::config::AutonomyConfig,
         workspace_dir: &Path,
     ) -> Self {
+        let tripwire_patterns = autonomy_config
+            .tripwire_patterns
+            .iter()
+            .filter_map(|p| match Regex::new(p) {
+                Ok(re) => Some(re),
+                Err(e) => {
+                    tracing::warn!("Invalid tripwire pattern {}: {}", p, e);
+                    None
+                }
+            })
+            .collect();
+
         Self {
             autonomy: autonomy_config.level,
             workspace_dir: workspace_dir.to_path_buf(),
@@ -592,6 +694,10 @@ impl SecurityPolicy {
             require_approval_for_medium_risk: autonomy_config.require_approval_for_medium_risk,
             block_high_risk_commands: autonomy_config.block_high_risk_commands,
             tracker: ActionTracker::new(),
+            agent_id: None,
+            tripwire_patterns,
+            agent_denied_tools: Vec::new(),
+            agent_allowed_tools: Vec::new(),
         }
     }
 }

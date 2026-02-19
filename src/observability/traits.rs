@@ -80,6 +80,100 @@ pub trait Observer: Send + Sync + 'static {
     fn as_any(&self) -> &dyn std::any::Any;
 }
 
+// ── Intervention Handler (AutoGen InterventionHandler analog) ──────────
+
+/// Verdict returned by an intervention handler.
+#[derive(Debug, Clone)]
+pub enum InterventionVerdict {
+    /// Allow the message through unchanged.
+    Allow,
+    /// Replace the message content with the provided string.
+    Modify(String),
+    /// Drop the message entirely. Contains a reason string.
+    Drop(String),
+    /// Halt the agent loop entirely. Critical safety violation.
+    Halt(String),
+}
+
+/// Message direction for intervention context.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageDirection {
+    Inbound,
+    OutboundRequest,
+    InboundResponse,
+    ToolInvocation,
+    ToolResult,
+    OutboundResponse,
+}
+
+/// Context provided to intervention handlers.
+#[derive(Debug, Clone)]
+pub struct InterventionContext {
+    pub direction: MessageDirection,
+    pub agent_id: Option<String>,
+    pub tool_name: Option<String>,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+}
+
+/// Message-level middleware that can intercept, modify, or drop messages.
+/// ZeroClaw analog of AutoGen's InterventionHandler.
+pub trait InterventionHandler: Send + Sync + 'static {
+    fn intercept(&self, content: &str, ctx: &InterventionContext) -> InterventionVerdict;
+    fn name(&self) -> &str;
+}
+
+/// No-op handler that allows everything.
+pub struct NoopInterventionHandler;
+
+impl InterventionHandler for NoopInterventionHandler {
+    fn intercept(&self, _content: &str, _ctx: &InterventionContext) -> InterventionVerdict {
+        InterventionVerdict::Allow
+    }
+    fn name(&self) -> &str { "noop" }
+}
+
+/// Chain of handlers. First Drop/Halt wins.
+pub struct InterventionChain {
+    handlers: Vec<Box<dyn InterventionHandler>>,
+}
+
+impl InterventionChain {
+    pub fn new() -> Self { Self { handlers: Vec::new() } }
+
+    pub fn add(&mut self, handler: Box<dyn InterventionHandler>) {
+        self.handlers.push(handler);
+    }
+
+    pub fn process(&self, content: &str, ctx: &InterventionContext) -> InterventionVerdict {
+        let mut current = content.to_string();
+        for handler in &self.handlers {
+            match handler.intercept(&current, ctx) {
+                InterventionVerdict::Allow => continue,
+                InterventionVerdict::Modify(new) => {
+                    tracing::debug!(handler = handler.name(), "InterventionHandler modified message");
+                    current = new;
+                }
+                InterventionVerdict::Drop(reason) => {
+                    tracing::warn!(handler = handler.name(), reason = %reason, "InterventionHandler dropped message");
+                    return InterventionVerdict::Drop(reason);
+                }
+                InterventionVerdict::Halt(reason) => {
+                    tracing::error!(handler = handler.name(), reason = %reason, "InterventionHandler HALT");
+                    return InterventionVerdict::Halt(reason);
+                }
+            }
+        }
+        if current != content { InterventionVerdict::Modify(current) } else { InterventionVerdict::Allow }
+    }
+
+    pub fn is_empty(&self) -> bool { self.handlers.is_empty() }
+}
+
+impl Default for InterventionChain {
+    fn default() -> Self { Self::new() }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,5 +244,55 @@ mod tests {
 
         assert!(matches!(cloned_event, ObserverEvent::ToolCall { .. }));
         assert!(matches!(cloned_metric, ObserverMetric::RequestLatency(_)));
+    }
+
+    // ── InterventionHandler tests ──
+
+    struct AllowH;
+    impl InterventionHandler for AllowH {
+        fn intercept(&self, _c: &str, _x: &InterventionContext) -> InterventionVerdict { InterventionVerdict::Allow }
+        fn name(&self) -> &str { "allow" }
+    }
+
+    struct DropH(String);
+    impl InterventionHandler for DropH {
+        fn intercept(&self, _c: &str, _x: &InterventionContext) -> InterventionVerdict { InterventionVerdict::Drop(self.0.clone()) }
+        fn name(&self) -> &str { "drop" }
+    }
+
+    struct UpperH;
+    impl InterventionHandler for UpperH {
+        fn intercept(&self, c: &str, _x: &InterventionContext) -> InterventionVerdict { InterventionVerdict::Modify(c.to_uppercase()) }
+        fn name(&self) -> &str { "upper" }
+    }
+
+    fn ictx() -> InterventionContext {
+        InterventionContext { direction: MessageDirection::Inbound, agent_id: None, tool_name: None, provider: None, model: None }
+    }
+
+    #[test]
+    fn noop_handler_allows() {
+        assert!(matches!(NoopInterventionHandler.intercept("x", &ictx()), InterventionVerdict::Allow));
+    }
+
+    #[test]
+    fn chain_empty_allows() {
+        assert!(matches!(InterventionChain::new().process("x", &ictx()), InterventionVerdict::Allow));
+    }
+
+    #[test]
+    fn chain_drop_stops() {
+        let mut c = InterventionChain::new();
+        c.add(Box::new(AllowH));
+        c.add(Box::new(DropH("no".into())));
+        c.add(Box::new(AllowH));
+        assert!(matches!(c.process("x", &ictx()), InterventionVerdict::Drop(r) if r == "no"));
+    }
+
+    #[test]
+    fn chain_modify_feeds_forward() {
+        let mut c = InterventionChain::new();
+        c.add(Box::new(UpperH));
+        assert!(matches!(c.process("hi", &ictx()), InterventionVerdict::Modify(ref s) if s == "HI"));
     }
 }

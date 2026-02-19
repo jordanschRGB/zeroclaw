@@ -5,7 +5,7 @@ use crate::agent::memory_loader::{DefaultMemoryLoader, MemoryLoader};
 use crate::agent::prompt::{PromptContext, SystemPromptBuilder};
 use crate::config::Config;
 use crate::memory::{self, Memory, MemoryCategory};
-use crate::observability::{self, Observer, ObserverEvent};
+use crate::observability::{self, Observer, ObserverEvent, InterventionChain, InterventionVerdict, InterventionContext, MessageDirection, TripwireHandler, DepthGuardHandler, ConvergenceDetector};
 use crate::providers::{self, ChatMessage, ChatRequest, ConversationMessage, Provider};
 use crate::runtime;
 use crate::security::SecurityPolicy;
@@ -35,6 +35,8 @@ pub struct Agent {
     history: Vec<ConversationMessage>,
     classification_config: crate::config::QueryClassificationConfig,
     available_hints: Vec<String>,
+    security: Arc<SecurityPolicy>,
+    intervention_chain: InterventionChain,
 }
 
 pub struct AgentBuilder {
@@ -54,6 +56,8 @@ pub struct AgentBuilder {
     auto_save: Option<bool>,
     classification_config: Option<crate::config::QueryClassificationConfig>,
     available_hints: Option<Vec<String>>,
+    security: Option<Arc<SecurityPolicy>>,
+    intervention_chain: Option<InterventionChain>,
 }
 
 impl AgentBuilder {
@@ -75,6 +79,8 @@ impl AgentBuilder {
             auto_save: None,
             classification_config: None,
             available_hints: None,
+            security: None,
+            intervention_chain: None,
         }
     }
 
@@ -161,6 +167,16 @@ impl AgentBuilder {
         self
     }
 
+    pub fn security(mut self, security: Arc<SecurityPolicy>) -> Self {
+        self.security = Some(security);
+        self
+    }
+
+    pub fn intervention_chain(mut self, chain: InterventionChain) -> Self {
+        self.intervention_chain = Some(chain);
+        self
+    }
+
     pub fn build(self) -> Result<Agent> {
         let tools = self
             .tools
@@ -202,6 +218,8 @@ impl AgentBuilder {
             history: Vec::new(),
             classification_config: self.classification_config.unwrap_or_default(),
             available_hints: self.available_hints.unwrap_or_default(),
+            security: self.security.unwrap_or_else(|| Arc::new(SecurityPolicy::default())),
+            intervention_chain: self.intervention_chain.unwrap_or_default(),
         })
     }
 }
@@ -290,11 +308,30 @@ impl Agent {
         let available_hints: Vec<String> =
             config.model_routes.iter().map(|r| r.hint.clone()).collect();
 
+        // ── Build InterventionChain from config ──
+        let mut intervention_chain = InterventionChain::new();
+
+        // Tripwire: regex-based halt on forbidden content
+        if !config.autonomy.tripwire_patterns.is_empty() {
+            intervention_chain.add(Box::new(
+                TripwireHandler::from_strings(&config.autonomy.tripwire_patterns),
+            ));
+        }
+
+        // Depth guard: prevent delegates from delegating (one-depth dispatch)
+        intervention_chain.add(Box::new(DepthGuardHandler));
+
+        // Convergence detector: flag when multiple delegate responses agree
+        // too closely (Jaccard trigram similarity > 70%)
+        intervention_chain.add(Box::new(ConvergenceDetector::new(0.7)));
+
         Agent::builder()
             .provider(provider)
             .tools(tools)
             .memory(memory)
             .observer(observer)
+            .security(security)
+            .intervention_chain(intervention_chain)
             .tool_dispatcher(tool_dispatcher)
             .memory_loader(Box::new(DefaultMemoryLoader::new(
                 5,
@@ -355,6 +392,51 @@ impl Agent {
 
     async fn execute_tool_call(&self, call: &ParsedToolCall) -> ToolExecutionResult {
         let start = Instant::now();
+
+        // ══ ACT ══ Check tool invocation via InterventionChain
+        if !self.intervention_chain.is_empty() {
+            let ctx = InterventionContext {
+                direction: MessageDirection::ToolInvocation,
+                agent_id: self.security.agent_id.clone(),
+                tool_name: Some(call.name.clone()),
+                provider: None,
+                model: Some(self.model_name.clone()),
+            };
+            let args_str = call.arguments.to_string();
+            match self.intervention_chain.process(&args_str, &ctx) {
+                InterventionVerdict::Allow => {}
+                InterventionVerdict::Modify(_) => {} // tool args modification not supported yet
+                InterventionVerdict::Drop(reason) => {
+                    tracing::warn!(tool = %call.name, reason = %reason, "ACT: tool invocation dropped");
+                    return ToolExecutionResult {
+                        name: call.name.clone(),
+                        output: format!("Error: Tool invocation blocked: {reason}"),
+                        success: false,
+                        tool_call_id: call.tool_call_id.clone(),
+                    };
+                }
+                InterventionVerdict::Halt(reason) => {
+                    tracing::error!(tool = %call.name, reason = %reason, "ACT: HALT on tool invocation");
+                    return ToolExecutionResult {
+                        name: call.name.clone(),
+                        output: format!("HALT: {reason}"),
+                        success: false,
+                        tool_call_id: call.tool_call_id.clone(),
+                    };
+                }
+            }
+        }
+
+        // ── Three-layer guardrail: check_tool ──
+        if let Err(denied_reason) = self.security.check_tool(&call.name) {
+            tracing::warn!(tool = %call.name, reason = %denied_reason, "Tool denied by security policy");
+            return ToolExecutionResult {
+                name: call.name.clone(),
+                output: format!("Error: {denied_reason}"),
+                success: false,
+                tool_call_id: call.tool_call_id.clone(),
+            };
+        }
 
         let result = if let Some(tool) = self.tools.iter().find(|t| t.name() == call.name) {
             match tool.execute(call.arguments.clone()).await {
@@ -445,6 +527,37 @@ impl Agent {
             format!("{context}{user_message}")
         };
 
+        // ══ STOP ══ Receive input, gate check via InterventionChain
+        let enriched = if !self.intervention_chain.is_empty() {
+            let ctx = InterventionContext {
+                direction: MessageDirection::Inbound,
+                agent_id: self.security.agent_id.clone(),
+                tool_name: None,
+                provider: None,
+                model: Some(self.model_name.clone()),
+            };
+            match self.intervention_chain.process(&enriched, &ctx) {
+                InterventionVerdict::Allow => enriched,
+                InterventionVerdict::Modify(modified) => modified,
+                InterventionVerdict::Drop(reason) => {
+                    tracing::warn!(reason = %reason, "STOP: message dropped by intervention");
+                    return Ok(format!("[Message dropped: {reason}]"));
+                }
+                InterventionVerdict::Halt(reason) => {
+                    tracing::error!(reason = %reason, "STOP: HALT triggered by intervention");
+                    return Err(anyhow::anyhow!("HALT: {}", reason));
+                }
+            }
+        } else {
+            enriched
+        };
+
+        // ── Three-layer guardrail: check_input ──
+        if let Err(halt_reason) = self.security.check_input(&enriched) {
+            tracing::error!(reason = %halt_reason, "Tripwire triggered on input");
+            return Err(anyhow::anyhow!("{}", halt_reason));
+        }
+
         self.history
             .push(ConversationMessage::Chat(ChatMessage::user(enriched)));
 
@@ -479,6 +592,37 @@ impl Agent {
                 } else {
                     text
                 };
+
+                // ══ THINK → output ══ Check LLM response via InterventionChain
+                let final_text = if !self.intervention_chain.is_empty() {
+                    let ctx = InterventionContext {
+                        direction: MessageDirection::OutboundResponse,
+                        agent_id: self.security.agent_id.clone(),
+                        tool_name: None,
+                        provider: None,
+                        model: Some(self.model_name.clone()),
+                    };
+                    match self.intervention_chain.process(&final_text, &ctx) {
+                        InterventionVerdict::Allow => final_text,
+                        InterventionVerdict::Modify(modified) => modified,
+                        InterventionVerdict::Drop(reason) => {
+                            tracing::warn!(reason = %reason, "THINK: output dropped by intervention");
+                            return Ok(format!("[Response dropped: {reason}]"));
+                        }
+                        InterventionVerdict::Halt(reason) => {
+                            tracing::error!(reason = %reason, "THINK: HALT on output");
+                            return Err(anyhow::anyhow!("HALT: {}", reason));
+                        }
+                    }
+                } else {
+                    final_text
+                };
+
+                // ── Three-layer guardrail: check_output ──
+                if let Err(halt_reason) = self.security.check_output(&final_text) {
+                    tracing::error!(reason = %halt_reason, "Tripwire triggered on output");
+                    return Err(anyhow::anyhow!("{}", halt_reason));
+                }
 
                 self.history
                     .push(ConversationMessage::Chat(ChatMessage::assistant(

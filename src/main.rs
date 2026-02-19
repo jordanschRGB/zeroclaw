@@ -61,6 +61,7 @@ mod migration;
 mod observability;
 mod onboard;
 mod peripherals;
+mod persona;
 mod providers;
 mod runtime;
 mod security;

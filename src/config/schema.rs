@@ -164,6 +164,14 @@ pub struct DelegateAgentConfig {
     /// Max recursion depth for nested delegation
     #[serde(default = "default_max_depth")]
     pub max_depth: u32,
+    /// Tools this agent is denied from using (default-allow with deny list).
+    /// Matches tool names or "group:xxx" prefixes for tool groups.
+    #[serde(default)]
+    pub denied_tools: Vec<String>,
+    /// If non-empty, only these tools are allowed (default-deny with allow list).
+    /// Takes precedence over denied_tools.
+    #[serde(default)]
+    pub allowed_tools: Vec<String>,
 }
 
 fn default_max_depth() -> u32 {
@@ -1532,6 +1540,13 @@ pub struct AutonomyConfig {
     /// Tools that always require interactive approval, even after "Always".
     #[serde(default = "default_always_ask")]
     pub always_ask: Vec<String>,
+
+    /// Regex patterns that trigger an immediate halt (tripwire).
+    /// Checked against all input/output content. If any pattern matches,
+    /// the agent loop is terminated and the operator is notified.
+    /// Example: ["(?i)rm\s+-rf\s+/", "(?i)DROP\s+TABLE"]
+    #[serde(default)]
+    pub tripwire_patterns: Vec<String>,
 }
 
 fn default_auto_approve() -> Vec<String> {
@@ -1587,6 +1602,7 @@ impl Default for AutonomyConfig {
             block_high_risk_commands: true,
             auto_approve: default_auto_approve(),
             always_ask: default_always_ask(),
+            tripwire_patterns: Vec::new(),
         }
     }
 }
@@ -3206,6 +3222,7 @@ default_temperature = 0.7
                 block_high_risk_commands: true,
                 auto_approve: vec!["file_read".into()],
                 always_ask: vec![],
+                tripwire_patterns: vec![],
             },
             runtime: RuntimeConfig {
                 kind: "docker".into(),
@@ -3445,6 +3462,8 @@ tool_dispatcher = "xml"
                 api_key: Some("agent-credential".into()),
                 temperature: None,
                 max_depth: 3,
+                denied_tools: Vec::new(),
+                allowed_tools: Vec::new(),
             },
         );
 

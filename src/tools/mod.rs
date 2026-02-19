@@ -456,6 +456,8 @@ mod tests {
                 api_key: None,
                 temperature: None,
                 max_depth: 3,
+                denied_tools: Vec::new(),
+                allowed_tools: Vec::new(),
             },
         );
 
