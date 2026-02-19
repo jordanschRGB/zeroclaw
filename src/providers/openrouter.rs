@@ -397,7 +397,12 @@ impl Provider for OpenRouterProvider {
     }
 
     fn supports_native_tools(&self) -> bool {
-        true
+        // Disabled: many models on OpenRouter ignore or mishandle the native
+        // tools API parameter, especially when the system prompt already
+        // contains text-based <tool_call> instructions.  Relying on the
+        // prompt-guided XML format + loop_::parse_tool_calls() is more
+        // reliable across the model zoo.
+        false
     }
 
     async fn chat_with_tools(
