@@ -1,7 +1,7 @@
 use crate::approval::{ApprovalManager, ApprovalRequest, ApprovalResponse};
 use crate::config::Config;
 use crate::memory::{self, Memory, MemoryCategory};
-use crate::observability::{self, Observer, ObserverEvent};
+use crate::observability::{self, Observer, ObserverEvent, InterventionChain, InterventionVerdict, InterventionContext, MessageDirection, TripwireHandler, SingleActionHandler, DepthGuardHandler, ConvergenceDetector};
 use crate::providers::{self, ChatMessage, ChatRequest, Provider, ToolCall};
 use crate::runtime;
 use crate::security::SecurityPolicy;
@@ -828,6 +828,7 @@ pub(crate) async fn agent_turn(
     silent: bool,
     max_tool_iterations: usize,
     security: &SecurityPolicy,
+    chain: &InterventionChain,
 ) -> Result<String> {
     run_tool_call_loop(
         provider,
@@ -843,6 +844,7 @@ pub(crate) async fn agent_turn(
         max_tool_iterations,
         None,
         security,
+        chain,
     )
     .await
 }
@@ -864,6 +866,7 @@ pub(crate) async fn run_tool_call_loop(
     max_tool_iterations: usize,
     on_delta: Option<tokio::sync::mpsc::Sender<String>>,
     security: &SecurityPolicy,
+    chain: &InterventionChain,
 ) -> Result<String> {
     let max_iterations = if max_tool_iterations == 0 {
         DEFAULT_MAX_TOOL_ITERATIONS
@@ -1055,6 +1058,39 @@ DENIED: {}
                 continue;
             }
 
+            // ── InterventionChain: SingleAction / DepthGuard / Convergence ──
+            if !chain.is_empty() {
+                let ctx = InterventionContext {
+                    direction: MessageDirection::ToolInvocation,
+                    agent_id: None,
+                    tool_name: Some(call.name.clone()),
+                    provider: Some(provider_name.to_string()),
+                    model: Some(model.to_string()),
+                };
+                match chain.process(&call.arguments.to_string(), &ctx) {
+                    InterventionVerdict::Allow => {}
+                    InterventionVerdict::Modify(_modified) => {
+                        // Allow with modified content (currently no tool-arg rewriting)
+                    }
+                    InterventionVerdict::Drop(reason) => {
+                        tracing::warn!(tool = %call.name, reason = %reason, "InterventionChain dropped tool call");
+                        individual_results.push(format!("DROPPED: {reason}"));
+                        let _ = writeln!(
+                            tool_results,
+                            "<tool_result name=\"{}\">
+DROPPED by intervention handler: {}
+</tool_result>",
+                            call.name, reason
+                        );
+                        continue;
+                    }
+                    InterventionVerdict::Halt(reason) => {
+                        tracing::error!(tool = %call.name, reason = %reason, "InterventionChain HALT");
+                        return Ok(format!("HALTED: {reason}"));
+                    }
+                }
+            }
+
             observer.record_event(&ObserverEvent::ToolCallStart {
                 tool: call.name.clone(),
             });
@@ -1163,6 +1199,16 @@ pub async fn run(
         &config.autonomy,
         &config.workspace_dir,
     ));
+
+    // ── InterventionChain (behavioral guardrails) ────────────────
+    let mut chain = InterventionChain::new();
+    chain.add(Box::new(
+        TripwireHandler::from_strings(&config.autonomy.tripwire_patterns),
+    ));
+    chain.add(Box::new(DepthGuardHandler));
+    chain.add(Box::new(SingleActionHandler::new(1)));
+    chain.add(Box::new(ConvergenceDetector::new(0.7)));
+    let chain = chain; // freeze
 
     // ── Memory (the brain) ────────────────────────────────────────
     let mem: Arc<dyn Memory> = Arc::from(memory::create_memory_with_storage(
@@ -1431,6 +1477,7 @@ pub async fn run(
             config.agent.max_tool_iterations,
             None,
             &security,
+            &chain,
         )
         .await?;
         final_output = response.clone();
@@ -1558,6 +1605,7 @@ pub async fn run(
                 config.agent.max_tool_iterations,
                 None,
                 &security,
+                &chain,
             )
             .await
             {
@@ -1567,6 +1615,8 @@ pub async fn run(
                     continue;
                 }
             };
+            // Reset per-turn handler state (SingleActionHandler counter, etc.)
+            chain.reset_all();
             final_output = response.clone();
             if let Err(e) = crate::channels::Channel::send(
                 &cli,
@@ -1767,6 +1817,15 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
         ChatMessage::user(&enriched),
     ];
 
+    // ── InterventionChain for process_message ──
+    let mut chain = InterventionChain::new();
+    chain.add(Box::new(
+        TripwireHandler::from_strings(&config.autonomy.tripwire_patterns),
+    ));
+    chain.add(Box::new(DepthGuardHandler));
+    chain.add(Box::new(SingleActionHandler::new(1)));
+    chain.add(Box::new(ConvergenceDetector::new(0.7)));
+
     agent_turn(
         provider.as_ref(),
         &mut history,
@@ -1778,6 +1837,7 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
         true,
         config.agent.max_tool_iterations,
         &security,
+        &chain,
     )
     .await
 }

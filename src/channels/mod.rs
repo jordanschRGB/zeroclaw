@@ -38,6 +38,7 @@ use crate::observability::{self, Observer};
 use crate::providers::{self, ChatMessage, Provider};
 use crate::runtime;
 use crate::security::SecurityPolicy;
+use crate::observability::{InterventionChain, TripwireHandler, SingleActionHandler, DepthGuardHandler, ConvergenceDetector};
 use crate::tools::{self, Tool};
 use crate::util::truncate_with_ellipsis;
 use anyhow::{Context, Result};
@@ -121,6 +122,7 @@ struct ChannelRuntimeContext {
     provider_runtime_options: providers::ProviderRuntimeOptions,
     workspace_dir: Arc<PathBuf>,
     security: Arc<SecurityPolicy>,
+    chain: Arc<InterventionChain>,
 }
 
 fn conversation_memory_key(msg: &traits::ChannelMessage) -> String {
@@ -712,6 +714,7 @@ async fn process_channel_message(ctx: Arc<ChannelRuntimeContext>, msg: traits::C
             ctx.max_tool_iterations,
             delta_tx,
             &ctx.security,
+            &ctx.chain,
         ),
     )
     .await;
@@ -1838,6 +1841,14 @@ pub async fn start_channels(config: Config) -> Result<()> {
         provider_runtime_options,
         workspace_dir: Arc::new(config.workspace_dir.clone()),
         security: Arc::clone(&security),
+        chain: {
+            let mut c = InterventionChain::new();
+            c.add(Box::new(TripwireHandler::from_strings(&config.autonomy.tripwire_patterns)));
+            c.add(Box::new(DepthGuardHandler));
+            c.add(Box::new(SingleActionHandler::new(1)));
+            c.add(Box::new(ConvergenceDetector::new(0.7)));
+            Arc::new(c)
+        },
     });
 
     run_message_dispatch_loop(rx, runtime_ctx, max_in_flight_messages).await;
@@ -2229,6 +2240,7 @@ mod tests {
             provider_runtime_options: providers::ProviderRuntimeOptions::default(),
             workspace_dir: Arc::new(std::env::temp_dir()),
             security: Arc::new(SecurityPolicy::default()),
+            chain: Arc::new(InterventionChain::new()),
         });
 
         process_channel_message(
@@ -2282,6 +2294,7 @@ mod tests {
             provider_runtime_options: providers::ProviderRuntimeOptions::default(),
             workspace_dir: Arc::new(std::env::temp_dir()),
             security: Arc::new(SecurityPolicy::default()),
+            chain: Arc::new(InterventionChain::new()),
         });
 
         process_channel_message(
@@ -2344,6 +2357,7 @@ mod tests {
             provider_runtime_options: providers::ProviderRuntimeOptions::default(),
             workspace_dir: Arc::new(std::env::temp_dir()),
             security: Arc::new(SecurityPolicy::default()),
+            chain: Arc::new(InterventionChain::new()),
         });
 
         process_channel_message(
@@ -2427,6 +2441,7 @@ mod tests {
             provider_runtime_options: providers::ProviderRuntimeOptions::default(),
             workspace_dir: Arc::new(std::env::temp_dir()),
             security: Arc::new(SecurityPolicy::default()),
+            chain: Arc::new(InterventionChain::new()),
         });
 
         process_channel_message(
@@ -2486,6 +2501,7 @@ mod tests {
             provider_runtime_options: providers::ProviderRuntimeOptions::default(),
             workspace_dir: Arc::new(std::env::temp_dir()),
             security: Arc::new(SecurityPolicy::default()),
+            chain: Arc::new(InterventionChain::new()),
         });
 
         process_channel_message(
@@ -2540,6 +2556,7 @@ mod tests {
             provider_runtime_options: providers::ProviderRuntimeOptions::default(),
             workspace_dir: Arc::new(std::env::temp_dir()),
             security: Arc::new(SecurityPolicy::default()),
+            chain: Arc::new(InterventionChain::new()),
         });
 
         process_channel_message(
@@ -2645,6 +2662,7 @@ mod tests {
             provider_runtime_options: providers::ProviderRuntimeOptions::default(),
             workspace_dir: Arc::new(std::env::temp_dir()),
             security: Arc::new(SecurityPolicy::default()),
+            chain: Arc::new(InterventionChain::new()),
         });
 
         let (tx, rx) = tokio::sync::mpsc::channel::<traits::ChannelMessage>(4);
@@ -2716,6 +2734,7 @@ mod tests {
             provider_runtime_options: providers::ProviderRuntimeOptions::default(),
             workspace_dir: Arc::new(std::env::temp_dir()),
             security: Arc::new(SecurityPolicy::default()),
+            chain: Arc::new(InterventionChain::new()),
         });
 
         process_channel_message(
@@ -3107,6 +3126,7 @@ mod tests {
             provider_runtime_options: providers::ProviderRuntimeOptions::default(),
             workspace_dir: Arc::new(std::env::temp_dir()),
             security: Arc::new(SecurityPolicy::default()),
+            chain: Arc::new(InterventionChain::new()),
         });
 
         process_channel_message(
